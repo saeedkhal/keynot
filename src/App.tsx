@@ -14,6 +14,7 @@ import {
   normalize,
   orderObjects,
   resized,
+  settleBindings,
   snapMove,
   translateObject,
   withObjects,
@@ -21,6 +22,7 @@ import {
 import { encodeGif } from './exportGif'
 import { exampleDoc } from './example'
 import { frameBetween, sampleAt, segments, totalSeconds } from './magic'
+import { insertPoint, nearestBox, pathLength, pathOf, withPath } from './path'
 import { SceneView, useFitScale } from './Scene'
 import type { Doc, EaseName, Guide, Handle, SceneObject, Transition } from './types'
 import './styles.css'
@@ -44,7 +46,7 @@ type Gesture =
   | { kind: 'move'; ids: string[]; start: Map<string, SceneObject>; x: number; y: number; moved: boolean }
   | { kind: 'resize'; id: string; handle: Handle; start: SceneObject; x: number; y: number }
   | { kind: 'rotate'; id: string; start: SceneObject; angle: number }
-  | { kind: 'end'; id: string; start: SceneObject; which: 'start' | 'end' }
+  | { kind: 'point'; id: string; index: number; start: SceneObject }
 
 function pointOf(event: { clientX: number; clientY: number }, stage: HTMLDivElement, width: number, height: number) {
   const rect = stage.getBoundingClientRect()
@@ -60,13 +62,15 @@ export function App() {
   const [future, setFuture] = useState<Doc[]>([])
   const [slideIndex, setSlideIndex] = useState(0)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [pathPoint, setPathPoint] = useState<number | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [playing, setPlaying] = useState(false)
   const [loop, setLoop] = useState(true)
   const [preview, setPreview] = useState<{ objects: SceneObject[]; label: string; slideIndex: number } | null>(null)
   const [exporting, setExporting] = useState(false)
-  const [gifScale, setGifScale] = useState(0.5)
+  const [gifScale, setGifScale] = useState(2)
   const [guides, setGuides] = useState<Guide[]>([])
+  const [boundHover, setBoundHover] = useState<string | null>(null)
   const [presenting, setPresenting] = useState(false)
   const [presentObjects, setPresentObjects] = useState<SceneObject[] | null>(null)
   const [presentScale, setPresentScale] = useState(1)
@@ -81,7 +85,7 @@ export function App() {
   const stageRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   presentingRef.current = presenting
-  const { setSlot, scale } = useFitScale(doc.width, doc.height)
+  const { setSlot, scaleX, scaleY } = useFitScale(doc.width, doc.height)
   live.current = doc
   const index = Math.min(slideIndex, doc.slides.length - 1)
   const slide = doc.slides[index]
@@ -126,7 +130,7 @@ export function App() {
   }
 
   function patchSlide(objects: SceneObject[], record: boolean) {
-    const next = withObjects(live.current, index, objects)
+    const next = withObjects(live.current, index, settleBindings(objects))
     if (record) commit(next)
     else replace(next)
   }
@@ -293,6 +297,16 @@ export function App() {
       } else if (event.key === 'Delete' || event.key === 'Backspace') {
         if (!selectedIds.length) return
         event.preventDefault()
+        const only = selectedIds.length === 1 ? slide.objects.find((object) => object.id === selectedIds[0]) : undefined
+        if (only?.type === 'arrow' && pathPoint !== null && pathOf(only).length > 2) {
+          const points = pathOf(only).filter((_, pointIndex) => pointIndex !== pathPoint)
+          patchSlide(
+            slide.objects.map((object) => (object.id === only.id ? withPath(object, points) : object)),
+            true,
+          )
+          setPathPoint(null)
+          return
+        }
         const ids = new Set(selectedIds)
         patchSlide(slide.objects.filter((object) => !ids.has(object.id)), true)
         setSelectedIds([])
@@ -389,11 +403,20 @@ export function App() {
           current.map((item) => (item.id === gesture.id ? { ...item, rotation: degrees } : item)),
           false,
         )
-      } else if (gesture.kind === 'end') {
+      } else if (gesture.kind === 'point') {
+        const boxes = current.filter((object) => object.type !== 'arrow')
+        const atEnd = gesture.index === 0 || gesture.index === pathOf(gesture.start).length - 1
+        const hit = atEnd ? nearestBox(boxes, point, 18) : null
+        const binding = hit?.id ?? null
+        setBoundHover(binding)
         patchSlide(
           current.map((object) => {
             if (object.id !== gesture.id) return object
-            return gesture.which === 'start' ? { ...gesture.start, x: point.x, y: point.y } : { ...gesture.start, x2: point.x, y2: point.y }
+            const points = pathOf(gesture.start).map((item, itemIndex) => (itemIndex === gesture.index ? { x: point.x, y: point.y } : item))
+            const last = points.length - 1
+            const startBound = gesture.index === 0 ? binding : gesture.start.startBound
+            const endBound = gesture.index === last ? binding : gesture.start.endBound
+            return withPath({ ...gesture.start, startBound, endBound }, points)
           }),
           false,
         )
@@ -403,6 +426,7 @@ export function App() {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       setGuides([])
+      setBoundHover(null)
       endHistory()
     }
     window.addEventListener('pointermove', move)
@@ -423,7 +447,7 @@ export function App() {
     track({ kind: 'move', ids: [...moving], start, x: point.x, y: point.y, moved: false })
   }
 
-  function onHandleDown(event: ReactPointerEvent, id: string, handle: Handle | 'rotate' | 'start' | 'end') {
+  function onHandleDown(event: ReactPointerEvent, id: string, handle: Handle | 'rotate' | number) {
     if (playing) return
     const object = slide.objects.find((item) => item.id === id)
     if (!object || object.locked) return
@@ -432,8 +456,9 @@ export function App() {
       const cx = object.x + object.w / 2
       const cy = object.y + object.h / 2
       track({ kind: 'rotate', id, start: object, angle: Math.atan2(point.y - cy, point.x - cx) })
-    } else if (handle === 'start' || handle === 'end') {
-      track({ kind: 'end', id, start: object, which: handle })
+    } else if (typeof handle === 'number') {
+      setPathPoint(handle)
+      track({ kind: 'point', id, index: handle, start: object })
     } else {
       track({ kind: 'resize', id, handle, start: object, x: point.x, y: point.y })
     }
@@ -441,7 +466,7 @@ export function App() {
 
   async function onExport() {
     setExporting(true)
-    setStatus('Rendering GIF…')
+      setStatus('Rendering a high-resolution GIF…')
     await new Promise((resolve) => setTimeout(resolve, 30))
     try {
       const blob = await encodeGif(doc, gifScale)
@@ -472,6 +497,10 @@ export function App() {
 
   const selected = slide.objects.filter((object) => selectedIds.includes(object.id))
   const single = selected.length === 1 ? selected[0] : null
+  const connectIds = [
+    ...(!playing && single?.type === 'arrow' ? [single.startBound, single.endBound] : []),
+    boundHover,
+  ].filter((id): id is string => !!id)
   const shownObjects = playing && preview ? preview.objects : slide.objects
   const liveSlide = playing && preview ? preview.slideIndex : index
 
@@ -565,11 +594,11 @@ export function App() {
             Blank slide
           </button>
         </aside>
-        <main className="canvas" ref={setSlot} data-playing={playing ? 'true' : 'false'}>
-          <div className="stage-scale" style={{ width: doc.width * scale, height: doc.height * scale }}>
+        <main className="canvas" data-playing={playing ? 'true' : 'false'}>
+          <div className="stage-scale" ref={setSlot}>
             <div
               ref={stageRef}
-              style={{ width: doc.width, height: doc.height, transform: `scale(${scale})`, transformOrigin: 'top left' }}
+              style={{ width: doc.width, height: doc.height, transform: `scale(${scaleX}, ${scaleY})`, transformOrigin: 'top left' }}
               onPointerDown={() => {
                 if (!playing) {
                   setSelectedIds([])
@@ -587,8 +616,19 @@ export function App() {
                 editingId={editingId}
                 testId="stage"
                 guides={guides}
+                connectIds={connectIds}
                 onPointerDownObject={onPointerDownObject}
-                onDoubleClickObject={(id) => {
+                onDoubleClickObject={(event, id) => {
+                  const object = slide.objects.find((item) => item.id === id)
+                  if (object?.type === 'arrow') {
+                    event.stopPropagation()
+                    const spot = stagePoint(event)
+                    patchSlide(
+                      slide.objects.map((item) => (item.id === id ? withPath(item, insertPoint(pathOf(item), spot.x, spot.y)) : item)),
+                      true,
+                    )
+                    return
+                  }
                   gestureStart.current = live.current
                   setSelectedIds([id])
                   setEditingId(id)
@@ -653,12 +693,15 @@ export function App() {
             Loop playback
           </label>
           <label className="field">
-            <span>GIF size</span>
+            <span>GIF quality</span>
             <select value={String(gifScale)} onChange={(event) => setGifScale(Number(event.target.value))}>
-              <option value="0.5">Half</option>
-              <option value="1">Full</option>
+              <option value="3">Max · {doc.width * 3}×{doc.height * 3}</option>
+              <option value="2">High · {doc.width * 2}×{doc.height * 2}</option>
+              <option value="1">Full · {doc.width}×{doc.height}</option>
+              <option value="0.5">Half · {Math.round(doc.width / 2)}×{Math.round(doc.height / 2)}</option>
             </select>
           </label>
+          <p className="hint">High is 2× and 30 frames a second. Max is sharper and slower to export.</p>
           <label className="field">
             <span>Canvas</span>
             <input type="color" value={toHex(doc.background)} onChange={(event) => commit({ ...doc, background: event.target.value })} />
@@ -704,10 +747,54 @@ export function App() {
                 <input type="color" value={toHex(single.textColor)} onChange={(event) => updateSelected({ textColor: event.target.value })} />
               </label>
               <label className="field">
-                <span>{single.type === 'arrow' ? 'Color' : 'Border'}</span>
+                <span>{single.type === 'arrow' ? 'Color' : 'Border color'}</span>
                 <input type="color" value={toHex(single.stroke)} onChange={(event) => updateSelected({ stroke: event.target.value })} />
               </label>
-              <Num label="Border width" value={single.strokeWidth} onChange={(strokeWidth) => updateSelected({ strokeWidth: Math.max(0, strokeWidth) })} />
+              <Num label={single.type === 'arrow' ? 'Width' : 'Border width'} value={single.strokeWidth} onChange={(strokeWidth) => updateSelected({ strokeWidth: Math.max(0, strokeWidth) })} />
+              {single.type !== 'arrow' && (
+                <label className="field">
+                  <span>Border style</span>
+                  <select
+                    value={single.strokeStyle === 'dashed' ? 'dashed' : 'solid'}
+                    onChange={(event) => updateSelected({ strokeStyle: event.target.value === 'dashed' ? 'dashed' : 'solid' })}
+                  >
+                    <option value="solid">Solid</option>
+                    <option value="dashed">Dashed</option>
+                  </select>
+                </label>
+              )}
+              {single.type === 'arrow' && (
+                <>
+                  <label className="field">
+                    <span>Light {Math.round(single.light * 100)}%</span>
+                    <input
+                      data-testid="arrow-light"
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={single.light}
+                      onChange={(event) => updateSelected({ light: Number(event.target.value) })}
+                    />
+                  </label>
+                  <p className="hint">Light draws the line. 0 is nothing, 100% is the full {Math.round(pathLength(pathOf(single)))}px. Duplicate the slide and change Light to grow it. Drag an end onto a card and it stays attached.</p>
+                  <button
+                    type="button"
+                    disabled={pathPoint === null || pathOf(single).length <= 2}
+                    onClick={() => {
+                      if (pathPoint === null) return
+                      const points = pathOf(single).filter((_, pointIndex) => pointIndex !== pathPoint)
+                      patchSlide(
+                        slide.objects.map((object) => (object.id === single.id ? withPath(object, points) : object)),
+                        true,
+                      )
+                      setPathPoint(null)
+                    }}
+                  >
+                    Remove point
+                  </button>
+                </>
+              )}
               <label className="field">
                 <span>Opacity</span>
                 <input

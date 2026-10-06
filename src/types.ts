@@ -21,10 +21,15 @@ export type SceneObject = {
   radius: number
   stroke: string
   strokeWidth: number
+  strokeStyle: 'solid' | 'dashed'
   shadow: boolean
   locked: boolean
   textVAlign: 'center' | 'top'
   groupId: string | null
+  points: { x: number; y: number }[]
+  light: number
+  startBound: string | null
+  endBound: string | null
 }
 
 export type Transition = {

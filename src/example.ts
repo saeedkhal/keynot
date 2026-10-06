@@ -9,13 +9,13 @@ function region(id: string, x: number, text: string): SceneObject {
     y: 36,
     w: 270,
     h: 468,
-    fill: '#fffcf8',
+    fill: '#22242e',
     text,
-    textColor: '#9a9388',
+    textColor: '#ffffff',
     font: 'sans',
     fontSize: 15,
     radius: 20,
-    stroke: '#e6e1d8',
+    stroke: '#44445a',
     strokeWidth: 1,
     shadow: false,
     locked: true,
@@ -45,22 +45,22 @@ const regions = [region('region-stack', 40, 'call stack'), region('region-api', 
 
 export function exampleDoc(): Doc {
   const traveling = [
-    card('card-main', 80, 230, '#f3d36b', 'bar()'),
-    card('card-main', 385, 230, '#8ecae6', 'bar()'),
-    card('card-main', 690, 230, '#f4a261', 'bar()'),
-    card('card-main', 80, 220, '#95d5b2', 'bar()'),
+    card('card-main', 80, 230, '#22242e', 'bar()'),
+    card('card-main', 385, 230, '#22242e', 'bar()'),
+    card('card-main', 690, 230, '#22242e', 'bar()'),
+    card('card-main', 80, 220, '#22242e', 'bar()'),
   ]
   const names = ['Stack', 'Web API', 'Queue', 'Back on the stack']
   return {
     version: 1,
     width: 960,
     height: 540,
-    background: '#f6f3ee',
+    background: '#000000',
     slides: traveling.map((main, index) => ({
       id: uid(),
       name: names[index],
       transition: defaultTransition(),
-      objects: index === 3 ? [...regions.map((item) => ({ ...item })), main, card('card-log', 80, 292, '#f28482', '() => "Hey"')] : [...regions.map((item) => ({ ...item })), main],
+      objects: index === 3 ? [...regions.map((item) => ({ ...item })), main, card('card-log', 80, 292, '#22242e', '() => "Hey"')] : [...regions.map((item) => ({ ...item })), main],
     })),
   }
 }

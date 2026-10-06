@@ -1,4 +1,5 @@
 import type { Doc, Guide, Handle, SceneObject, Slide, Transition } from './types'
+import { anchorOnBox, pathOf, withPath } from './path'
 
 export const PALETTE = ['#f3d36b', '#8ecae6', '#f4a261', '#95d5b2', '#f28482', '#c9b6ff', '#ffd6a5']
 
@@ -11,7 +12,7 @@ export function defaultTransition(): Transition {
 }
 
 export function baseObject(partial: Partial<SceneObject> & Pick<SceneObject, 'id' | 'type'>): SceneObject {
-  return {
+  const object: SceneObject = {
     x: 80,
     y: 80,
     w: 180,
@@ -20,19 +21,30 @@ export function baseObject(partial: Partial<SceneObject> & Pick<SceneObject, 'id
     y2: 80,
     rotation: 0,
     opacity: 1,
-    fill: '#f3d36b',
+    fill: '#22242e',
     text: '',
-    textColor: '#1c1915',
+    textColor: '#ffffff',
     fontSize: 16,
     font: 'mono',
     radius: 12,
     stroke: '#1c1915',
     strokeWidth: 0,
+    strokeStyle: 'solid',
     shadow: true,
     locked: false,
     textVAlign: 'center',
     groupId: null,
+    points: [],
+    light: 0,
+    startBound: null,
+    endBound: null,
     ...partial,
+  }
+  return {
+    ...object,
+    strokeStyle: object.strokeStyle === 'dashed' ? 'dashed' : 'solid',
+    startBound: object.startBound || null,
+    endBound: object.endBound || null,
   }
 }
 
@@ -41,7 +53,7 @@ export function blankDoc(): Doc {
     version: 1,
     width: 960,
     height: 540,
-    background: '#f6f3ee',
+    background: '#000000',
     slides: [blankSlide('Slide 1')],
   }
 }
@@ -62,12 +74,21 @@ export function normalize(input: Doc): Doc {
     version: 1,
     width: input.width || 960,
     height: input.height || 540,
-    background: input.background || '#f6f3ee',
+    background: input.background || '#000000',
     slides: input.slides.map((slide, index) => ({
       id: slide.id || uid(),
       name: slide.name || `Slide ${index + 1}`,
       transition: { ...fallback, ...slide.transition },
-      objects: (slide.objects ?? []).map((object) => baseObject({ ...object, id: object.id || uid(), type: object.type || 'card' })),
+      objects: settleBindings(
+        (slide.objects ?? []).map((object) =>
+          baseObject({
+            ...object,
+            id: object.id || uid(),
+            type: object.type || 'card',
+            strokeStyle: object.strokeStyle === 'dashed' ? 'dashed' : 'solid',
+          }),
+        ),
+      ),
     })),
   }
 }
@@ -102,20 +123,58 @@ export function withObjects(doc: Doc, index: number, objects: SceneObject[]): Do
   }
 }
 
+function boxCenter(object: SceneObject): { x: number; y: number } {
+  return { x: object.x + object.w / 2, y: object.y + object.h / 2 }
+}
+
+export function settleBindings(objects: SceneObject[]): SceneObject[] {
+  const byId = new Map(objects.map((object) => [object.id, object]))
+  return objects.map((object) => {
+    if (object.type !== 'arrow') return object
+    const points = pathOf(object).map((point) => ({ ...point }))
+    if (points.length < 2) return { ...object, startBound: null, endBound: null }
+    const startBox = object.startBound ? byId.get(object.startBound) : undefined
+    const endBox = object.endBound ? byId.get(object.endBound) : undefined
+    const startBound = startBox && startBox.type !== 'arrow' ? startBox.id : null
+    const endBound = endBox && endBox.type !== 'arrow' ? endBox.id : null
+    if (startBound && startBox) {
+      const from = points.length === 2 && endBox && endBox.type !== 'arrow' ? boxCenter(endBox) : points[1]
+      points[0] = anchorOnBox(startBox, from)
+    }
+    if (endBound && endBox) {
+      const from = points.length === 2 && startBox && startBox.type !== 'arrow' ? boxCenter(startBox) : points[points.length - 2]
+      points[points.length - 1] = anchorOnBox(endBox, from)
+    }
+    if (!startBound && !endBound && !object.startBound && !object.endBound) return object
+    return withPath({ ...object, startBound, endBound }, points)
+  })
+}
+
 export function translateObject(object: SceneObject, dx: number, dy: number): SceneObject {
   const next = { ...object, x: object.x + dx, y: object.y + dy }
   if (object.type === 'arrow') {
-    next.x2 = object.x2 + dx
-    next.y2 = object.y2 + dy
+    return withPath(
+      next,
+      pathOf(object).map((point) => ({ x: point.x + dx, y: point.y + dy })),
+    )
   }
   return next
 }
 
 export function objectBounds(object: SceneObject): { x: number; y: number; w: number; h: number } {
   if (object.type === 'arrow') {
-    const x = Math.min(object.x, object.x2)
-    const y = Math.min(object.y, object.y2)
-    return { x, y, w: Math.max(1, Math.abs(object.x2 - object.x)), h: Math.max(1, Math.abs(object.y2 - object.y)) }
+    const points = pathOf(object)
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const point of points) {
+      minX = Math.min(minX, point.x)
+      minY = Math.min(minY, point.y)
+      maxX = Math.max(maxX, point.x)
+      maxY = Math.max(maxY, point.y)
+    }
+    return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) }
   }
   return { x: object.x, y: object.y, w: object.w, h: object.h }
 }
@@ -317,7 +376,7 @@ export function addCard(doc: Doc, index: number): { doc: Doc; id: string } {
     y: doc.height / 2 - 26 + (n % 4) * 16,
     w: 180,
     h: 52,
-    fill: PALETTE[n % PALETTE.length],
+    fill: '#22242e',
     text: 'label',
     shadow: true,
   })
@@ -347,19 +406,26 @@ export function addLabel(doc: Doc, index: number): { doc: Doc; id: string } {
 export function addArrow(doc: Doc, index: number): { doc: Doc; id: string } {
   const slide = doc.slides[index]
   const id = uid()
-  const object = baseObject({
-    id,
-    type: 'arrow',
-    x: doc.width / 2 - 120,
-    y: doc.height / 2,
-    x2: doc.width / 2 + 80,
-    y2: doc.height / 2,
-    w: 200,
-    h: 12,
-    stroke: '#1c1915',
-    strokeWidth: 3,
-    fill: '#1c1915',
-    shadow: false,
-  })
+  const object = withPath(
+    baseObject({
+      id,
+      type: 'arrow',
+      stroke: '#ffffff',
+      strokeWidth: 3,
+      fill: '#ffffff',
+      shadow: false,
+      light: 1,
+      points: [
+        { x: doc.width / 2 - 120, y: doc.height / 2 },
+        { x: doc.width / 2, y: doc.height / 2 - 70 },
+        { x: doc.width / 2 + 80, y: doc.height / 2 },
+      ],
+    }),
+    [
+      { x: doc.width / 2 - 120, y: doc.height / 2 },
+      { x: doc.width / 2, y: doc.height / 2 - 70 },
+      { x: doc.width / 2 + 80, y: doc.height / 2 },
+    ],
+  )
   return { doc: withObjects(doc, index, [...slide.objects, object]), id }
 }

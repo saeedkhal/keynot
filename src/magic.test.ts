@@ -1,6 +1,7 @@
-import { alignObjects, baseObject, resized, snapMove } from './doc'
+import { alignObjects, baseObject, resized, settleBindings, snapMove, translateObject } from './doc'
 import { exampleDoc } from './example'
 import { applyEase, frameBetween, parseColor, sampleAt, totalSeconds } from './magic'
+import { insertPoint, pathLength, pathOf, trimPath, withPath } from './path'
 import type { Slide } from './types'
 
 function assert(condition: boolean, message: string) {
@@ -78,5 +79,50 @@ const snapped = snapMove([dragged], [parked], 96, 0, { width: 960, height: 540 }
 assert(Math.abs(snapped.dx - 100) < 0.01 && snapped.guides.some((guide) => guide.axis === 'v' && guide.at === 100), 'alignment guide snaps a card to the next card')
 const free = snapMove([dragged], [parked], 40, 30, { width: 960, height: 540 })
 assert(free.dx === 40 && free.dy === 30 && free.guides.length === 0, 'a far drag does not snap')
+
+const bent = insertPoint([{ x: 0, y: 0 }, { x: 100, y: 0 }], 50, 8)
+assert(bent.length === 3 && Math.abs(bent[1].x - 50) < 0.01, 'a path point can be inserted on a line')
+assert(Math.abs(pathLength([{ x: 0, y: 0 }, { x: 100, y: 0 }]) - 100) < 1, 'straight path length is the distance')
+
+const straight = [{ x: 0, y: 0 }, { x: 100, y: 0 }]
+assert(trimPath(straight, 0).length === 0, 'zero light draws nothing')
+const half = trimPath(straight, 0.5)
+assert(half.length >= 2 && Math.abs(half[half.length - 1].x - 50) < 1, 'half light draws half the line')
+assert(Math.abs((trimPath(straight, 1).at(-1)?.x ?? 0) - 100) < 0.01, 'full light draws the whole line')
+
+const box = baseObject({ id: 'box', type: 'card', x: 200, y: 200, w: 100, h: 60 })
+const arrow = withPath(
+  baseObject({
+    id: 'arr',
+    type: 'arrow',
+    light: 1,
+    endBound: 'box',
+    points: [
+      { x: 40, y: 230 },
+      { x: 250, y: 230 },
+    ],
+  }),
+  [
+    { x: 40, y: 230 },
+    { x: 250, y: 230 },
+  ],
+)
+const stuck = settleBindings([box, arrow])
+const stuckArrow = stuck.find((object) => object.id === 'arr')
+const stuckEnd = pathOf(stuckArrow!)
+assert(!!stuckArrow && Math.abs(stuckEnd[1].x - 200) < 1 && Math.abs(stuckEnd[1].y - 230) < 1, 'arrow end connects to the card edge')
+const followed = settleBindings([translateObject(box, 40, 0), stuckArrow!])
+const followedEnd = pathOf(followed.find((object) => object.id === 'arr')!)
+assert(Math.abs(followedEnd[1].x - 240) < 1 && Math.abs(followedEnd[1].y - 230) < 1, 'connected end follows the card')
+const released = settleBindings([stuckArrow!])
+assert(released[0]?.endBound === null, 'a missing card lets the arrow go')
+
+const grownArrow = frameBetween(
+  { ...slideA, objects: [baseObject({ id: 'arr', type: 'arrow', light: 0, points: straight })] },
+  { ...slideB, objects: [baseObject({ id: 'arr', type: 'arrow', light: 1, points: straight })] },
+  0.5,
+  slideA.transition,
+).find((object) => object.id === 'arr')
+assert(!!grownArrow && Math.abs(grownArrow.light - 0.5) < 0.01, 'light length lerps so the line can grow')
 
 console.log('magic tests passed')

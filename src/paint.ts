@@ -1,4 +1,10 @@
 import type { Doc, SceneObject } from './types'
+import { arrowHeadPoints, pathOf, trimPath } from './path'
+
+function tracePath(ctx: CanvasRenderingContext2D, points: { x: number; y: number }[]) {
+  ctx.beginPath()
+  points.forEach((point, index) => (index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)))
+}
 
 function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, radius: number) {
   const r = Math.max(0, Math.min(radius, w / 2, h / 2))
@@ -11,19 +17,11 @@ function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: num
   ctx.closePath()
 }
 
-function arrowHead(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, width: number) {
-  const angle = Math.atan2(y2 - y1, x2 - x1)
-  const length = Math.max(10, width * 4)
-  ctx.beginPath()
-  ctx.moveTo(x2, y2)
-  ctx.lineTo(x2 - length * Math.cos(angle - Math.PI / 7), y2 - length * Math.sin(angle - Math.PI / 7))
-  ctx.lineTo(x2 - length * Math.cos(angle + Math.PI / 7), y2 - length * Math.sin(angle + Math.PI / 7))
-  ctx.closePath()
-}
-
 export function paintScene(ctx: CanvasRenderingContext2D, doc: Doc, objects: SceneObject[]) {
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
   ctx.fillStyle = doc.background
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
   const scale = ctx.canvas.width / doc.width
@@ -32,16 +30,24 @@ export function paintScene(ctx: CanvasRenderingContext2D, doc: Doc, objects: Sce
     ctx.save()
     ctx.globalAlpha = Math.max(0, Math.min(1, object.opacity))
     if (object.type === 'arrow') {
-      ctx.strokeStyle = object.stroke
-      ctx.fillStyle = object.stroke
-      ctx.lineWidth = object.strokeWidth || 3
-      ctx.lineCap = 'round'
-      ctx.beginPath()
-      ctx.moveTo(object.x, object.y)
-      ctx.lineTo(object.x2, object.y2)
-      ctx.stroke()
-      arrowHead(ctx, object.x, object.y, object.x2, object.y2, object.strokeWidth || 3)
-      ctx.fill()
+      const samples = trimPath(pathOf(object), object.light)
+      if (samples.length >= 2) {
+        const width = object.strokeWidth || 3
+        ctx.lineCap = 'round'
+        ctx.lineJoin = 'round'
+        ctx.strokeStyle = object.stroke
+        ctx.lineWidth = width
+        tracePath(ctx, samples)
+        ctx.stroke()
+        ctx.fillStyle = object.stroke
+        const head = arrowHeadPoints(samples, width).split(' ').map((pair) => pair.split(',').map(Number))
+        ctx.beginPath()
+        ctx.moveTo(head[0][0], head[0][1])
+        ctx.lineTo(head[1][0], head[1][1])
+        ctx.lineTo(head[2][0], head[2][1])
+        ctx.closePath()
+        ctx.fill()
+      }
       ctx.restore()
       continue
     }
@@ -66,7 +72,13 @@ export function paintScene(ctx: CanvasRenderingContext2D, doc: Doc, objects: Sce
       ctx.strokeStyle = object.stroke
       ctx.lineWidth = object.strokeWidth
       roundedRect(ctx, object.x + inset, object.y + inset, Math.max(0, object.w - inset * 2), Math.max(0, object.h - inset * 2), object.radius)
+      if (object.strokeStyle === 'dashed') {
+        const dash = Math.max(6, object.strokeWidth * 3)
+        const gap = Math.max(4, object.strokeWidth * 2)
+        ctx.setLineDash([dash, gap])
+      }
       ctx.stroke()
+      ctx.setLineDash([])
     }
     if (object.text) {
       ctx.fillStyle = object.textColor

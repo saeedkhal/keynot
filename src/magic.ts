@@ -1,4 +1,6 @@
+import { settleBindings } from './doc'
 import type { Doc, EaseName, SceneObject, Slide, Transition } from './types'
+import { lerpPoints, pathOf, withPath } from './path'
 
 export function applyEase(t: number, ease: EaseName): number {
   const x = Math.min(1, Math.max(0, t))
@@ -44,6 +46,11 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
 }
 
+function bindingAt(from: string | null, to: string | null, t: number): string | null {
+  if (from && from === to) return from
+  return t >= 0.5 ? to || null : from || null
+}
+
 function lerpAngle(a: number, b: number, t: number): number {
   const delta = ((((b - a) % 360) + 540) % 360) - 180
   return a + delta * t
@@ -51,7 +58,7 @@ function lerpAngle(a: number, b: number, t: number): number {
 
 function lerpObject(from: SceneObject, to: SceneObject, t: number): SceneObject {
   const swapped = t >= 0.5
-  return {
+  const next: SceneObject = {
     ...from,
     x: lerp(from.x, to.x, t),
     y: lerp(from.y, to.y, t),
@@ -64,9 +71,11 @@ function lerpObject(from: SceneObject, to: SceneObject, t: number): SceneObject 
     fontSize: lerp(from.fontSize, to.fontSize, t),
     radius: lerp(from.radius, to.radius, t),
     strokeWidth: lerp(from.strokeWidth, to.strokeWidth, t),
+    light: lerp(from.light ?? 0, to.light ?? 0, t),
     fill: lerpColor(from.fill, to.fill, t),
     textColor: lerpColor(from.textColor, to.textColor, t),
     stroke: lerpColor(from.stroke, to.stroke, t),
+    strokeStyle: (swapped ? to.strokeStyle : from.strokeStyle) === 'dashed' ? 'dashed' : 'solid',
     text: swapped ? to.text : from.text,
     font: swapped ? to.font : from.font,
     shadow: swapped ? to.shadow : from.shadow,
@@ -74,7 +83,11 @@ function lerpObject(from: SceneObject, to: SceneObject, t: number): SceneObject 
     type: swapped ? to.type : from.type,
     locked: from.locked,
     groupId: swapped ? to.groupId : from.groupId,
+    startBound: bindingAt(from.startBound, to.startBound, t),
+    endBound: bindingAt(from.endBound, to.endBound, t),
   }
+  if (from.type === 'arrow' || to.type === 'arrow') return withPath(next, lerpPoints(pathOf(from), pathOf(to), t))
+  return next
 }
 
 export function frameBetween(from: Slide, to: Slide, t: number, transition: Transition): SceneObject[] {
@@ -100,7 +113,7 @@ export function frameBetween(from: Slide, to: Slide, t: number, transition: Tran
     frames.push({ object, order })
   }
   frames.sort((a, b) => a.order - b.order)
-  return frames.map((frame) => frame.object)
+  return settleBindings(frames.map((frame) => frame.object))
 }
 
 export type Segment =
