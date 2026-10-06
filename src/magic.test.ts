@@ -1,7 +1,7 @@
-import { alignObjects, baseObject, resized, settleBindings, snapMove, translateObject } from './doc'
+import { alignObjects, baseObject, measureLabel, orderObjects, resized, settleBindings, snapMove, translateObject } from './doc'
 import { exampleDoc } from './example'
 import { applyEase, frameBetween, parseColor, sampleAt, totalSeconds } from './magic'
-import { insertPoint, pathLength, pathOf, trimPath, withPath } from './path'
+import { insertPoint, pathLength, pathOf, restPath, trimPath, withPath } from './path'
 import type { Slide } from './types'
 
 function assert(condition: boolean, message: string) {
@@ -49,8 +49,13 @@ const cut = frameBetween(slideA, slideB, 0.5, { ...slideA.transition, fadeUnmatc
 assert(!cut.some((object) => object.id === 'gone'), 'without fade, the old card is already gone')
 assert(cut.some((object) => object.id === 'fresh' && object.opacity === 1), 'without fade, the new card pops in')
 
-const grown = resized(baseObject({ id: 's', type: 'card', x: 0, y: 0, w: 100, h: 40 }), 'e', 20, 0)
+const grown = resized(baseObject({ id: 's', type: 'card', x: 0, y: 0, w: 100, h: 40, fontSize: 20 }), 'e', 20, 0)
 assert(Math.abs(grown.w - 120) < 0.01 && Math.abs(grown.x) < 0.01, 'east resize keeps the left edge')
+assert(grown.fontSize === 20, 'card text stays the same size when the box grows')
+const label = resized(baseObject({ id: 'l', type: 'label', text: 'Label', x: 0, y: 0, w: 100, h: 40, fontSize: 20 }), 'se', 100, 40)
+const fitted = measureLabel('Label', 40, label.strokeWidth)
+assert(Math.abs(label.fontSize - 40) < 0.01 && Math.abs(label.w - fitted.w) < 0.01 && Math.abs(label.h - fitted.h) < 0.01, 'label text grows and the box hugs the word')
+assert(Math.abs(label.x) < 0.01 && Math.abs(label.y) < 0.01, 'resizing a label keeps the opposite corner')
 
 const aligned = alignObjects(
   [
@@ -89,6 +94,9 @@ assert(trimPath(straight, 0).length === 0, 'zero light draws nothing')
 const half = trimPath(straight, 0.5)
 assert(half.length >= 2 && Math.abs(half[half.length - 1].x - 50) < 1, 'half light draws half the line')
 assert(Math.abs((trimPath(straight, 1).at(-1)?.x ?? 0) - 100) < 0.01, 'full light draws the whole line')
+const hidden = restPath(straight, 0.5)
+assert(hidden.length >= 2 && Math.abs(hidden[0].x - 50) < 1 && Math.abs(hidden[hidden.length - 1].x - 100) < 1, 'the undrawn half stays available')
+assert(restPath(straight, 0).length >= 2 && restPath(straight, 1).length === 0, 'zero light keeps the whole ghost and full light hides it')
 
 const box = baseObject({ id: 'box', type: 'card', x: 200, y: 200, w: 100, h: 60 })
 const arrow = withPath(
@@ -124,5 +132,16 @@ const grownArrow = frameBetween(
   slideA.transition,
 ).find((object) => object.id === 'arr')
 assert(!!grownArrow && Math.abs(grownArrow.light - 0.5) < 0.01, 'light length lerps so the line can grow')
+
+const stack = [
+  baseObject({ id: 'a', type: 'card', x: 0, y: 0 }),
+  baseObject({ id: 'b', type: 'card', x: 10, y: 10 }),
+  baseObject({ id: 'c', type: 'card', x: 20, y: 20 }),
+]
+const idsOf = (objects: { id: string }[]) => objects.map((object) => object.id).join(',')
+assert(idsOf(orderObjects(stack, ['b'], 'forward')) === 'a,c,b', 'forward moves one step toward the front')
+assert(idsOf(orderObjects(stack, ['b'], 'backward')) === 'b,a,c', 'backward moves one step toward the back')
+assert(idsOf(orderObjects(stack, ['b'], 'front')) === 'a,c,b', 'front puts the selection on top')
+assert(idsOf(orderObjects(stack, ['b'], 'back')) === 'b,a,c', 'back puts the selection behind everything')
 
 console.log('magic tests passed')

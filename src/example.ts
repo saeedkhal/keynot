@@ -9,21 +9,21 @@ function region(id: string, x: number, text: string): SceneObject {
     y: 36,
     w: 270,
     h: 468,
-    fill: '#22242e',
+    fill: 'transparent',
     text,
-    textColor: '#ffffff',
+    textColor: '#f8f9fa',
     font: 'sans',
-    fontSize: 15,
-    radius: 20,
-    stroke: '#44445a',
-    strokeWidth: 1,
+    fontSize: 20,
+    radius: 16,
+    stroke: '#e9ecef',
+    strokeWidth: 1.5,
     shadow: false,
     locked: true,
     textVAlign: 'top',
   })
 }
 
-function card(id: string, x: number, y: number, fill: string, text: string): SceneObject {
+function card(id: string, x: number, y: number, text: string): SceneObject {
   return baseObject({
     id,
     type: 'card',
@@ -31,13 +31,15 @@ function card(id: string, x: number, y: number, fill: string, text: string): Sce
     y,
     w: 190,
     h: 52,
-    fill,
+    fill: 'transparent',
     text,
-    font: 'mono',
-    fontSize: 16,
-    radius: 12,
-    shadow: true,
-    strokeWidth: 0,
+    textColor: '#f8f9fa',
+    font: 'sans',
+    fontSize: 20,
+    radius: 10,
+    stroke: '#e9ecef',
+    strokeWidth: 1.5,
+    shadow: false,
   })
 }
 
@@ -45,10 +47,10 @@ const regions = [region('region-stack', 40, 'call stack'), region('region-api', 
 
 export function exampleDoc(): Doc {
   const traveling = [
-    card('card-main', 80, 230, '#22242e', 'bar()'),
-    card('card-main', 385, 230, '#22242e', 'bar()'),
-    card('card-main', 690, 230, '#22242e', 'bar()'),
-    card('card-main', 80, 220, '#22242e', 'bar()'),
+    card('card-main', 80, 230, 'bar()'),
+    card('card-main', 385, 230, 'bar()'),
+    card('card-main', 690, 230, 'bar()'),
+    card('card-main', 80, 220, 'bar()'),
   ]
   const names = ['Stack', 'Web API', 'Queue', 'Back on the stack']
   return {
@@ -60,7 +62,7 @@ export function exampleDoc(): Doc {
       id: uid(),
       name: names[index],
       transition: defaultTransition(),
-      objects: index === 3 ? [...regions.map((item) => ({ ...item })), main, card('card-log', 80, 292, '#22242e', '() => "Hey"')] : [...regions.map((item) => ({ ...item })), main],
+      objects: index === 3 ? [...regions.map((item) => ({ ...item })), main, card('card-log', 80, 292, '() => "Hey"')] : [...regions.map((item) => ({ ...item })), main],
     })),
   }
 }

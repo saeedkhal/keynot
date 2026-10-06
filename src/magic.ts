@@ -46,6 +46,11 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
 }
 
+function strokeKind(style: string | undefined): 'solid' | 'dashed' | 'dotted' {
+  if (style === 'dashed' || style === 'dotted') return style
+  return 'solid'
+}
+
 function bindingAt(from: string | null, to: string | null, t: number): string | null {
   if (from && from === to) return from
   return t >= 0.5 ? to || null : from || null
@@ -75,7 +80,8 @@ function lerpObject(from: SceneObject, to: SceneObject, t: number): SceneObject 
     fill: lerpColor(from.fill, to.fill, t),
     textColor: lerpColor(from.textColor, to.textColor, t),
     stroke: lerpColor(from.stroke, to.stroke, t),
-    strokeStyle: (swapped ? to.strokeStyle : from.strokeStyle) === 'dashed' ? 'dashed' : 'solid',
+    strokeStyle: strokeKind(swapped ? to.strokeStyle : from.strokeStyle),
+    roughness: lerp(from.roughness ?? 0, to.roughness ?? 0, t),
     text: swapped ? to.text : from.text,
     font: swapped ? to.font : from.font,
     shadow: swapped ? to.shadow : from.shadow,

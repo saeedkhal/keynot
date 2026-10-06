@@ -1,3 +1,11 @@
+@font-face {
+  font-family: Virgil;
+  src: url(/fonts/Virgil-Regular.woff2) format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   --bg: #141311;
@@ -8,7 +16,7 @@
   --accent: #ff5a36;
   --paper: #000000;
   --ink: #1c1915;
-  font-family: system-ui, sans-serif;
+  font-family: Virgil, system-ui, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -114,6 +122,24 @@ button.primary {
   padding: 0;
 }
 
+.thumb {
+  position: relative;
+  cursor: grab;
+  touch-action: none;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.thumb.is-dragging {
+  z-index: 3;
+  cursor: grabbing;
+  transition: none;
+}
+.thumb.is-settling { z-index: 3; cursor: grabbing; }
+.thumb.is-dragging .thumb-frame,
+.thumb.is-settling .thumb-frame {
+  transform: scale(1.045);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.48);
+}
+
 .thumb-frame {
   display: block;
   width: 148px;
@@ -122,6 +148,7 @@ button.primary {
   border-radius: 8px;
   border: 2px solid transparent;
   background: var(--paper);
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 180ms ease, border-color 180ms ease;
 }
 
 .thumb.is-live .thumb-frame {
@@ -180,10 +207,27 @@ button.primary {
   line-height: 1.2;
 }
 
+.obj-stroke {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
 .obj span {
   pointer-events: none;
   max-width: 100%;
   overflow: hidden;
+}
+
+.obj.is-label {
+  white-space: nowrap;
+  padding: 0 8px;
+}
+
+.obj.is-label span {
+  overflow: visible;
+  max-width: none;
 }
 
 .obj-edit {
@@ -200,9 +244,9 @@ button.primary {
   position: absolute;
   width: 10px;
   height: 10px;
-  background: white;
-  border: 1.5px solid var(--accent);
-  border-radius: 2px;
+  background: #121212;
+  border: 1.5px solid #e9ecef;
+  border-radius: 99px;
   z-index: 5;
 }
 
@@ -215,7 +259,22 @@ button.primary {
 .handle-sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
 .handle-w { left: -6px; top: calc(50% - 5px); cursor: ew-resize; }
 .handle-rotate { left: calc(50% - 5px); top: -22px; border-radius: 99px; cursor: grab; }
-.handle-end { position: absolute; z-index: 6; cursor: grab; }
+.handle-end {
+  position: absolute;
+  z-index: 6;
+  width: 12px;
+  height: 12px;
+  background: #121212;
+  border: 1.5px solid #e9ecef;
+  border-radius: 99px;
+  cursor: grab;
+}
+
+.handle-end-mid {
+  width: 8px;
+  height: 8px;
+  background: #e9ecef;
+}
 
 .arrow {
   position: absolute;
@@ -230,8 +289,8 @@ button.primary {
 }
 
 .is-selected {
-  outline: 1.5px solid var(--accent);
-  outline-offset: 2px;
+  outline: 1px solid #a5d8ff;
+  outline-offset: 3px;
 }
 
 .obj.is-connect {
@@ -285,10 +344,75 @@ button.primary {
 
 .hint { line-height: 1.4; margin: 0 0 8px; }
 
+.shape-style { margin: 4px 0 12px; }
+
+.style-label {
+  margin: 10px 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.swatches, .style-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.swatch {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  border: 2px solid transparent;
+}
+
+.swatch.is-on, .style-picks button.is-on {
+  border-color: #a5d8ff;
+}
+
+.style-picks button {
+  width: 36px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.style-picks button.is-on {
+  background: #5f3dc4;
+  border-color: #7950f2;
+}
+
+.dash {
+  width: 18px;
+  border-top: 2px solid currentColor;
+}
+
+.dash-dashed { border-top-style: dashed; }
+.dash-dotted { border-top-style: dotted; }
+
+.edge {
+  width: 16px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+}
+
+.edge-round { border-radius: 6px; }
+
 .grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0 8px;
+}
+
+.grid .field {
+  gap: 4px;
+  margin: 4px 0;
+}
+
+.grid .field input {
+  width: 58px;
+  padding: 4px 4px;
 }
 
 .row {
@@ -333,15 +457,29 @@ button.primary {
   position: fixed;
   inset: 0;
   z-index: 40;
-  background: #100f0d;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  overflow: hidden;
   display: grid;
   place-items: center;
 }
 
 .presenter:fullscreen {
-  background: #100f0d;
-  display: grid;
-  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+}
+
+.presenter .stage {
+  box-shadow: none;
+  outline: none;
+}
+
+.presenter-fit {
+  overflow: hidden;
 }
 
 .presenter-count {

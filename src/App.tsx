@@ -3,6 +3,7 @@ import {
   addArrow,
   addCard,
   addLabel,
+  fitLabel,
   addSlide,
   alignObjects,
   blankDoc,
@@ -10,6 +11,7 @@ import {
   distributeObjects,
   duplicateObjects,
   duplicateSlide,
+  moveSlide,
   isDoc,
   normalize,
   orderObjects,
@@ -20,6 +22,7 @@ import {
   withObjects,
 } from './doc'
 import { encodeGif } from './exportGif'
+import { encodeMp4 } from './exportMp4'
 import { exampleDoc } from './example'
 import { frameBetween, sampleAt, segments, totalSeconds } from './magic'
 import { insertPoint, nearestBox, pathLength, pathOf, withPath } from './path'
@@ -48,6 +51,27 @@ type Gesture =
   | { kind: 'rotate'; id: string; start: SceneObject; angle: number }
   | { kind: 'point'; id: string; index: number; start: SceneObject }
 
+function slideShift(index: number, from: number, to: number, slot: number) {
+  if (index === from) return 0
+  if (from < to && index > from && index <= to) return -slot
+  if (to < from && index >= to && index < from) return slot
+  return 0
+}
+
+function slideThumbStyle(
+  index: number,
+  drag: { from: number; to: number; dy: number; slot: number; phase: 'drag' | 'settle' } | null,
+) {
+  if (!drag) return undefined
+  if (drag.from === index) {
+    if (drag.phase !== 'settle') return undefined
+    return { transform: `translateY(${drag.dy}px)` }
+  }
+  const shift = slideShift(index, drag.from, drag.to, drag.slot)
+  if (!shift) return undefined
+  return { transform: `translateY(${shift}px)` }
+}
+
 function pointOf(event: { clientX: number; clientY: number }, stage: HTMLDivElement, width: number, height: number) {
   const rect = stage.getBoundingClientRect()
   return {
@@ -70,10 +94,11 @@ export function App() {
   const [exporting, setExporting] = useState(false)
   const [gifScale, setGifScale] = useState(2)
   const [guides, setGuides] = useState<Guide[]>([])
+  const [slideDrag, setSlideDrag] = useState<{ from: number; to: number; dy: number; slot: number; phase: 'drag' | 'settle' } | null>(null)
   const [boundHover, setBoundHover] = useState<string | null>(null)
   const [presenting, setPresenting] = useState(false)
   const [presentObjects, setPresentObjects] = useState<SceneObject[] | null>(null)
-  const [presentScale, setPresentScale] = useState(1)
+  const [presentScale, setPresentScale] = useState({ x: 1, y: 1 })
   const [status, setStatus] = useState('Duplicate a slide, move the same cards, then Play.')
   const live = useRef(doc)
   const presentingRef = useRef(false)
@@ -82,8 +107,11 @@ export function App() {
   const presentRef = useRef<HTMLDivElement>(null)
   const advanceRef = useRef<(direction: 1 | -1) => void>(() => {})
   const gestureStart = useRef<Doc | null>(null)
+  const skipSlideClick = useRef(false)
+  const slideDragToken = useRef(0)
   const stageRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const fileHandle = useRef<FileSystemFileHandle | null>(null)
   presentingRef.current = presenting
   const { setSlot, scaleX, scaleY } = useFitScale(doc.width, doc.height)
   live.current = doc
@@ -94,6 +122,41 @@ export function App() {
     const id = window.setTimeout(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(doc)), 250)
     return () => window.clearTimeout(id)
   }, [doc])
+
+  useEffect(() => {
+    let cancel = false
+    document.fonts.load('22px Virgil').then(() => {
+      if (cancel) return
+      const current = live.current
+      let changed = false
+      const slides = current.slides.map((slide) => {
+        let slideChanged = false
+        const objects = slide.objects.map((object) => {
+          const next = fitLabel(object)
+          if (next !== object) slideChanged = true
+          return next
+        })
+        if (!slideChanged) return slide
+        changed = true
+        return { ...slide, objects }
+      })
+      if (changed) replace({ ...current, slides })
+    })
+    return () => {
+      cancel = true
+    }
+  }, [])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        void saveFile()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   function commit(next: Doc) {
     setPast((items) => [...items.slice(-79), live.current])
@@ -138,7 +201,7 @@ export function App() {
   function updateSelected(patch: Partial<SceneObject>) {
     const ids = new Set(selectedIds)
     patchSlide(
-      slide.objects.map((object) => (ids.has(object.id) ? { ...object, ...patch } : object)),
+      slide.objects.map((object) => (ids.has(object.id) ? fitLabel({ ...object, ...patch }) : object)),
       true,
     )
   }
@@ -230,14 +293,20 @@ export function App() {
     }
     const node = presentRef.current
     const fit = () => {
-      const next = Math.min((window.innerWidth - 64) / doc.width, (window.innerHeight - 64) / doc.height)
-      setPresentScale(Math.max(0.2, next))
+      const box = node?.getBoundingClientRect()
+      const width = box?.width || window.innerWidth
+      const height = box?.height || window.innerHeight
+      setPresentScale({
+        x: Math.max(0.2, width / doc.width),
+        y: Math.max(0.2, height / doc.height),
+      })
     }
     fit()
     let enteredFullscreen = false
     const onFullscreen = () => {
       if (document.fullscreenElement) {
         enteredFullscreen = true
+        fit()
         return
       }
       if (enteredFullscreen) setPresenting(false)
@@ -464,24 +533,60 @@ export function App() {
     }
   }
 
-  async function onExport() {
+  async function onExport(kind: 'gif' | 'mp4') {
     setExporting(true)
-      setStatus('Rendering a high-resolution GIF…')
+    setStatus(kind === 'mp4' ? 'Rendering a 50 fps MP4…' : 'Rendering a 50 fps GIF…')
     await new Promise((resolve) => setTimeout(resolve, 30))
     try {
-      const blob = await encodeGif(doc, gifScale)
+      const blob = kind === 'mp4' ? await encodeMp4(doc, gifScale) : await encodeGif(doc, gifScale)
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = 'keynot.gif'
+      link.download = kind === 'mp4' ? 'keynot.mp4' : 'keynot.gif'
       link.click()
       URL.revokeObjectURL(url)
-      setStatus('GIF downloaded.')
+      setStatus(kind === 'mp4' ? 'MP4 downloaded.' : 'GIF downloaded.')
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'GIF export failed.')
+      setStatus(error instanceof Error ? error.message : kind === 'mp4' ? 'MP4 export failed.' : 'GIF export failed.')
     } finally {
       setExporting(false)
     }
+  }
+
+  async function saveFile() {
+    const body = JSON.stringify(live.current)
+    const picker = window.showSaveFilePicker
+    if (picker && !fileHandle.current) {
+      try {
+        fileHandle.current = await picker({
+          suggestedName: 'keynot.json',
+          types: [{ description: 'Keynot deck', accept: { 'application/json': ['.json'] } }],
+        })
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        fileHandle.current = null
+      }
+    }
+    if (fileHandle.current) {
+      try {
+        const writable = await fileHandle.current.createWritable()
+        await writable.write(body)
+        await writable.close()
+        setStatus(`Saved ${fileHandle.current.name}.`)
+        return
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        fileHandle.current = null
+      }
+    }
+    const blob = new Blob([body], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'keynot.json'
+    link.click()
+    URL.revokeObjectURL(url)
+    setStatus('Saved keynot.json.')
   }
 
   function openFile(file: File) {
@@ -565,8 +670,12 @@ export function App() {
         >
           Present
         </button>
-        <button type="button" data-testid="export-gif" className="primary" disabled={exporting} onClick={onExport}>
+        <button type="button" data-testid="save" onClick={() => void saveFile()}>Save</button>
+        <button type="button" data-testid="export-gif" className="primary" disabled={exporting} onClick={() => onExport('gif')}>
           {exporting ? 'Exporting…' : 'Export GIF'}
+        </button>
+        <button type="button" data-testid="export-mp4" className="primary" disabled={exporting} onClick={() => onExport('mp4')}>
+          {exporting ? 'Exporting…' : 'Export MP4'}
         </button>
       </header>
       <div className="workspace">
@@ -575,8 +684,94 @@ export function App() {
             <button
               type="button"
               key={item.id}
-              className={itemIndex === liveSlide ? 'thumb is-live' : 'thumb'}
+              className={[
+                'thumb',
+                itemIndex === liveSlide ? 'is-live' : '',
+                slideDrag?.from === itemIndex && slideDrag.phase === 'drag' ? 'is-dragging' : '',
+                slideDrag?.from === itemIndex && slideDrag.phase === 'settle' ? 'is-settling' : '',
+              ].filter(Boolean).join(' ')}
+              style={slideThumbStyle(itemIndex, slideDrag)}
+              onPointerDown={(event) => {
+                if (playing || event.button !== 0 || slideDragToken.current !== 0) return
+                const from = itemIndex
+                const startY = event.clientY
+                let moved = false
+                let dest = from
+                let dy = 0
+                const node = event.currentTarget
+                const film = node.parentElement
+                const gap = film ? Number.parseFloat(getComputedStyle(film).rowGap) || 0 : 0
+                const slot = node.getBoundingClientRect().height + gap
+                const mids = [...(film?.querySelectorAll<HTMLElement>(':scope > .thumb') ?? [])].map((thumb) => {
+                  const box = thumb.getBoundingClientRect()
+                  return box.top + box.height / 2
+                })
+                node.setPointerCapture(event.pointerId)
+                const move = (pointer: PointerEvent) => {
+                  dy = pointer.clientY - startY
+                  if (!moved && Math.abs(dy) < 6) return
+                  moved = true
+                  node.style.transform = `translateY(${dy}px)`
+                  let next = 0
+                  for (let i = 0; i < mids.length; i += 1) {
+                    if (i === from) continue
+                    if (pointer.clientY > mids[i]) next += 1
+                  }
+                  dest = Math.max(0, Math.min(mids.length - 1, next))
+                  setSlideDrag((prev) => {
+                    if (prev?.phase === 'settle') return prev
+                    if (prev && prev.from === from && prev.to === dest && prev.slot === slot) return prev
+                    return { from, to: dest, dy: 0, slot, phase: 'drag' }
+                  })
+                }
+                const up = () => {
+                  node.removeEventListener('pointermove', move)
+                  node.removeEventListener('pointerup', up)
+                  if (!moved) return
+                  skipSlideClick.current = true
+                  window.setTimeout(() => {
+                    skipSlideClick.current = false
+                  }, 0)
+                  const target = (dest - from) * slot
+                  const token = ++slideDragToken.current
+                  const finish = () => {
+                    if (slideDragToken.current !== token) return
+                    slideDragToken.current = 0
+                    node.style.transform = ''
+                    setSlideDrag(null)
+                    if (dest === from) return
+                    commit(moveSlide(live.current, from, dest))
+                    setPlaying(false)
+                    setSlideIndex(dest)
+                    setSelectedIds([])
+                  }
+                  if (Math.abs(dy - target) < 1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                    finish()
+                    return
+                  }
+                  setSlideDrag({ from, to: dest, dy, slot, phase: 'settle' })
+                  const onEnd = (pointer: TransitionEvent) => {
+                    if (pointer.propertyName !== 'transform') return
+                    node.removeEventListener('transitionend', onEnd)
+                    finish()
+                  }
+                  node.addEventListener('transitionend', onEnd)
+                  window.setTimeout(() => {
+                    node.removeEventListener('transitionend', onEnd)
+                    finish()
+                  }, 380)
+                  window.requestAnimationFrame(() => {
+                    window.requestAnimationFrame(() => {
+                      if (slideDragToken.current !== token) return
+                      setSlideDrag({ from, to: dest, dy: target, slot, phase: 'settle' })
+                    })
+                  })
+                }
+                node.addEventListener('pointermove', move)
+                node.addEventListener('pointerup', up)
+              }}
               onClick={() => {
+                if (skipSlideClick.current) return
                 setPlaying(false)
                 setSlideIndex(itemIndex)
                 setSelectedIds([])
@@ -646,6 +841,8 @@ export function App() {
           </div>
         </main>
         <aside className="inspector">
+          {selected.length === 0 ? (
+          <>
           <label className="field">
             <span>Slide name</span>
             <input
@@ -693,23 +890,57 @@ export function App() {
             Loop playback
           </label>
           <label className="field">
-            <span>GIF quality</span>
-            <select value={String(gifScale)} onChange={(event) => setGifScale(Number(event.target.value))}>
+            <span>Export quality</span>
+            <select data-testid="export-scale" value={String(gifScale)} onChange={(event) => setGifScale(Number(event.target.value))}>
               <option value="3">Max · {doc.width * 3}×{doc.height * 3}</option>
               <option value="2">High · {doc.width * 2}×{doc.height * 2}</option>
               <option value="1">Full · {doc.width}×{doc.height}</option>
               <option value="0.5">Half · {Math.round(doc.width / 2)}×{Math.round(doc.height / 2)}</option>
             </select>
           </label>
-          <p className="hint">High is 2× and 30 frames a second. Max is sharper and slower to export.</p>
+          <p className="hint">GIF and MP4 are exported at 50 frames a second. That is the fastest a GIF can play.</p>
           <label className="field">
             <span>Canvas</span>
             <input type="color" value={toHex(doc.background)} onChange={(event) => commit({ ...doc, background: event.target.value })} />
           </label>
           <p className="hint">{totalSeconds(doc).toFixed(1)}s · {segments(doc).length} beats</p>
+          <h2>File</h2>
+          <div className="row">
+            <button type="button" onClick={() => void saveFile()}>Save</button>
+            <button type="button" onClick={() => fileRef.current?.click()}>Open</button>
+            <button
+              type="button"
+              onClick={() => {
+                commit(blankDoc())
+                setSlideIndex(0)
+                setSelectedIds([])
+              }}
+            >
+              New
+            </button>
+            <button
+              type="button"
+              data-testid="load-example"
+              onClick={() => {
+                commit(exampleDoc())
+                setSlideIndex(0)
+                setSelectedIds([])
+                setStatus('Example loaded. Press Play.')
+              }}
+            >
+              Example
+            </button>
+            <button type="button" disabled={doc.slides.length < 2} onClick={() => { commit(deleteSlide(doc, index)); setSlideIndex(Math.max(0, index - 1)) }}>
+              Delete slide
+            </button>
+          </div>
+          </>
+          ) : (
+          <>
           {single && (
             <>
               <h2>{single.type === 'arrow' ? 'Arrow' : 'Card'}</h2>
+              <ShapeStyle object={single} onChange={updateSelected} />
               <label className="field">
                 <span>Text</span>
                 <input value={single.text} onChange={(event) => updateSelected({ text: event.target.value })} />
@@ -723,12 +954,7 @@ export function App() {
                     <Num label="H" value={single.h} onChange={(h) => updateSelected({ h: Math.max(28, h) })} />
                   </div>
                   <Num label="Rotation" value={single.rotation} onChange={(rotation) => updateSelected({ rotation })} />
-                  <Num label="Corner" value={single.radius} onChange={(radius) => updateSelected({ radius })} />
                   <Num label="Type size" value={single.fontSize} onChange={(fontSize) => updateSelected({ fontSize })} />
-                  <label className="field">
-                    <span>Fill</span>
-                    <input type="color" value={toHex(single.fill)} onChange={(event) => updateSelected({ fill: event.target.value })} />
-                  </label>
                   <label className="check">
                     <input type="checkbox" checked={single.shadow} onChange={(event) => updateSelected({ shadow: event.target.checked })} />
                     Shadow
@@ -746,23 +972,6 @@ export function App() {
                 <span>Text color</span>
                 <input type="color" value={toHex(single.textColor)} onChange={(event) => updateSelected({ textColor: event.target.value })} />
               </label>
-              <label className="field">
-                <span>{single.type === 'arrow' ? 'Color' : 'Border color'}</span>
-                <input type="color" value={toHex(single.stroke)} onChange={(event) => updateSelected({ stroke: event.target.value })} />
-              </label>
-              <Num label={single.type === 'arrow' ? 'Width' : 'Border width'} value={single.strokeWidth} onChange={(strokeWidth) => updateSelected({ strokeWidth: Math.max(0, strokeWidth) })} />
-              {single.type !== 'arrow' && (
-                <label className="field">
-                  <span>Border style</span>
-                  <select
-                    value={single.strokeStyle === 'dashed' ? 'dashed' : 'solid'}
-                    onChange={(event) => updateSelected({ strokeStyle: event.target.value === 'dashed' ? 'dashed' : 'solid' })}
-                  >
-                    <option value="solid">Solid</option>
-                    <option value="dashed">Dashed</option>
-                  </select>
-                </label>
-              )}
               {single.type === 'arrow' && (
                 <>
                   <label className="field">
@@ -821,56 +1030,26 @@ export function App() {
             </div>
           )}
           {selected.length > 0 && (
-            <div className="row">
-              <button type="button" onClick={() => patchSlide(orderObjects(slide.objects, selectedIds, 'back'), true)}>Back</button>
-              <button type="button" onClick={() => patchSlide(orderObjects(slide.objects, selectedIds, 'backward'), true)}>Backward</button>
-              <button type="button" onClick={() => patchSlide(orderObjects(slide.objects, selectedIds, 'forward'), true)}>Forward</button>
-              <button type="button" onClick={() => patchSlide(orderObjects(slide.objects, selectedIds, 'front'), true)}>Front</button>
-            </div>
+            <>
+              <p className="style-label">Layers</p>
+              <div className="style-picks">
+                <button type="button" aria-label="Send to back" onClick={() => patchSlide(orderObjects(slide.objects, selectedIds, 'back'), true)}>
+                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 19 H20 M12 4 V14 M8 11 L12 15 L16 11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                </button>
+                <button type="button" aria-label="Send backward" onClick={() => patchSlide(orderObjects(slide.objects, selectedIds, 'backward'), true)}>
+                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5 V17 M7 13 L12 18 L17 13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                </button>
+                <button type="button" aria-label="Bring forward" onClick={() => patchSlide(orderObjects(slide.objects, selectedIds, 'forward'), true)}>
+                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 19 V7 M7 11 L12 6 L17 11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                </button>
+                <button type="button" aria-label="Bring to front" onClick={() => patchSlide(orderObjects(slide.objects, selectedIds, 'front'), true)}>
+                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 5 H20 M12 20 V10 M8 13 L12 9 L16 13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                </button>
+              </div>
+            </>
           )}
-          <h2>File</h2>
-          <div className="row">
-            <button
-              type="button"
-              onClick={() => {
-                const blob = new Blob([JSON.stringify(doc)], { type: 'application/json' })
-                const url = URL.createObjectURL(blob)
-                const link = document.createElement('a')
-                link.href = url
-                link.download = 'keynot.json'
-                link.click()
-                URL.revokeObjectURL(url)
-              }}
-            >
-              Save
-            </button>
-            <button type="button" onClick={() => fileRef.current?.click()}>Open</button>
-            <button
-              type="button"
-              onClick={() => {
-                commit(blankDoc())
-                setSlideIndex(0)
-                setSelectedIds([])
-              }}
-            >
-              New
-            </button>
-            <button
-              type="button"
-              data-testid="load-example"
-              onClick={() => {
-                commit(exampleDoc())
-                setSlideIndex(0)
-                setSelectedIds([])
-                setStatus('Example loaded. Press Play.')
-              }}
-            >
-              Example
-            </button>
-            <button type="button" disabled={doc.slides.length < 2} onClick={() => { commit(deleteSlide(doc, index)); setSlideIndex(Math.max(0, index - 1)) }}>
-              Delete slide
-            </button>
-          </div>
+          </>
+          )}
           <input
             ref={fileRef}
             type="file"
@@ -889,12 +1068,13 @@ export function App() {
           ref={presentRef}
           className="presenter"
           data-testid="presenter"
+          style={{ background: doc.background }}
           onClick={(event) => {
             if (event.target === event.currentTarget) advanceRef.current(1)
           }}
         >
-          <div style={{ width: doc.width * presentScale, height: doc.height * presentScale }}>
-            <div style={{ width: doc.width, height: doc.height, transform: `scale(${presentScale})`, transformOrigin: 'top left' }}>
+          <div className="presenter-fit" style={{ width: doc.width * presentScale.x, height: doc.height * presentScale.y }}>
+            <div style={{ width: doc.width, height: doc.height, transform: `scale(${presentScale.x}, ${presentScale.y})`, transformOrigin: 'top left' }}>
               <SceneView
                 width={doc.width}
                 height={doc.height}
@@ -913,6 +1093,104 @@ export function App() {
         </div>
       )}
       <footer className="status">{status} · Present is fullscreen · arrows change slides · Ctrl+D duplicates cards</footer>
+    </div>
+  )
+}
+
+const STROKE_COLORS = ['#f8f9fa', '#ff8787', '#69db7c', '#4dabf7', '#ffa94d', '#ffd43b', '#ced4da']
+const FILL_COLORS = ['transparent', '#2b2d42', '#5c2b2b', '#1e3d2f', '#1c314d', '#4a3520']
+
+function ShapeStyle({ object, onChange }: { object: SceneObject; onChange: (patch: Partial<SceneObject>) => void }) {
+  const widths = object.type === 'label' ? [0, 1, 2, 4] : [1, 2, 4]
+  const width = object.strokeWidth < 0.5 ? 0 : [1, 2, 4].reduce((best, item) => (Math.abs(item - object.strokeWidth) < Math.abs(best - object.strokeWidth) ? item : best), 1)
+  const rough = object.roughness >= 1.5 ? 2 : object.roughness >= 0.5 ? 1 : 0
+  const kind = object.strokeStyle === 'dashed' || object.strokeStyle === 'dotted' ? object.strokeStyle : 'solid'
+  const round = object.radius > 0
+  return (
+    <div className="shape-style">
+      <p className="style-label">Stroke</p>
+      <div className="swatches">
+        {STROKE_COLORS.map((color) => (
+          <button key={color} type="button" className={object.stroke.toLowerCase() === color ? 'swatch is-on' : 'swatch'} style={{ background: color }} aria-label={`Stroke ${color}`} onClick={() => onChange({ stroke: color })} />
+        ))}
+      </div>
+      {object.type !== 'arrow' && (
+        <>
+          <p className="style-label">Background</p>
+          <div className="swatches">
+            {FILL_COLORS.map((color) => (
+              <button
+                key={color}
+                type="button"
+                className={object.fill === color ? 'swatch is-on' : 'swatch'}
+                style={{ background: color === 'transparent' ? 'repeating-conic-gradient(#3a3632 0% 25%, #171512 0% 50%) 0 0 / 8px 8px' : color }}
+                aria-label={`Background ${color}`}
+                onClick={() => onChange({ fill: color })}
+              />
+            ))}
+          </div>
+        </>
+      )}
+      <p className="style-label">Stroke width</p>
+      <div className="style-picks" data-testid="stroke-width">
+        {widths.map((item) => (
+          <button key={item} type="button" className={width === item ? 'is-on' : ''} aria-label={item === 0 ? 'No border' : `Stroke width ${item}`} onClick={() => onChange({ strokeWidth: item })}>
+            {item === 0 ? (
+              <svg viewBox="0 0 18 18" width="16" height="16" aria-hidden="true">
+                <circle cx="9" cy="9" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                <path d="M5 13 L13 5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <i style={{ height: item, width: 16, display: 'block', background: 'currentColor', borderRadius: 99 }} />
+            )}
+          </button>
+        ))}
+      </div>
+      <p className="style-label">Stroke style</p>
+      <div className="style-picks">
+        {(['solid', 'dashed', 'dotted'] as const).map((item) => (
+          <button key={item} type="button" className={kind === item ? 'is-on' : ''} aria-label={`Stroke ${item}`} onClick={() => onChange({ strokeStyle: item })}>
+            <i className={`dash dash-${item}`} />
+          </button>
+        ))}
+      </div>
+      <p className="style-label">Sloppiness</p>
+      <div className="style-picks">
+        {[0, 1, 2].map((item) => (
+          <button key={item} type="button" className={rough === item ? 'is-on' : ''} aria-label={`Sloppiness ${item}`} onClick={() => onChange({ roughness: item })}>
+            <svg viewBox="0 0 24 10" width="22" height="10" aria-hidden="true">
+              <path d={item === 0 ? 'M1 5 H23' : item === 1 ? 'M1 6 Q6 2 12 5 T23 4' : 'M1 7 Q4 1 8 6 T16 3 T23 6'} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </button>
+        ))}
+      </div>
+      {object.type !== 'arrow' && (
+        <>
+          <p className="style-label">Edges</p>
+          <div className="style-picks">
+            <button type="button" className={round ? '' : 'is-on'} aria-label="Sharp edges" onClick={() => onChange({ radius: 0 })}>
+              <i className="edge edge-sharp" />
+            </button>
+            <button type="button" className={round ? 'is-on' : ''} aria-label="Round edges" onClick={() => onChange({ radius: object.radius > 0 ? object.radius : 10 })}>
+              <i className="edge edge-round" />
+            </button>
+          </div>
+          {round && (
+            <label className="field">
+              <span>Round {Math.round(object.radius)}</span>
+              <input
+                data-testid="round-edge"
+                type="range"
+                min={1}
+                max={Math.max(8, Math.round(Math.min(object.w, object.h) / 2))}
+                step={1}
+                value={Math.max(1, Math.min(object.radius, Math.min(object.w, object.h) / 2))}
+                onChange={(event) => onChange({ radius: Number(event.target.value) })}
+              />
+            </label>
+          )}
+        </>
+      )}
     </div>
   )
 }

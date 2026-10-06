@@ -75,6 +75,47 @@ export function smoothSamples(points: Point[], perSegment = 16): Point[] {
   return samples
 }
 
+export function dashOf(style: string, width: number): string {
+  if (style === 'dashed') return `${Math.max(8, width * 4)} ${Math.max(5, width * 2.5)}`
+  if (style === 'dotted') return `${Math.max(1, width * 0.35)} ${Math.max(5, width * 2.6)}`
+  return ''
+}
+
+export function roughen(points: Point[], roughness: number, seed = 1): Point[] {
+  if (roughness < 0.5 || points.length < 2) return points
+  const amp = roughness < 1.5 ? 1.4 : 2.8
+  return points.map((point, index) => {
+    if (index === 0 || index === points.length - 1) return point
+    const prev = points[index - 1]
+    const next = points[Math.min(points.length - 1, index + 1)]
+    const dx = next.x - prev.x
+    const dy = next.y - prev.y
+    const length = Math.hypot(dx, dy) || 1
+    const wobble = Math.sin(seed * 0.17 + index * 1.7) * amp
+    return { x: point.x + (-dy / length) * wobble, y: point.y + (dx / length) * wobble }
+  })
+}
+
+export function outlinePoints(width: number, height: number, radius: number): Point[] {
+  const r = Math.max(0, Math.min(radius, width / 2, height / 2))
+  if (r < 1) return [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: width, y: height }, { x: 0, y: height }, { x: 0, y: 0 }]
+  const corner = (cx: number, cy: number, start: number) => {
+    const points: Point[] = []
+    for (let step = 0; step <= 5; step += 1) {
+      const angle = start + (Math.PI / 2) * (step / 5)
+      points.push({ x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r })
+    }
+    return points
+  }
+  return [
+    ...corner(r, r, Math.PI),
+    ...corner(width - r, r, Math.PI * 1.5),
+    ...corner(width - r, height - r, 0),
+    ...corner(r, height - r, Math.PI / 2),
+    { x: 0, y: r },
+  ]
+}
+
 export function toSvgPath(points: Point[]): string {
   if (points.length === 0) return ''
   return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
@@ -124,6 +165,33 @@ export function trimPath(points: Point[], amount: number): Point[] {
     ]
   }
   return samples
+}
+
+export function restPath(points: Point[], amount: number): Point[] {
+  const samples = smoothSamples(points)
+  const t = Math.min(1, Math.max(0, amount))
+  if (samples.length < 2 || t >= 1) return []
+  if (t <= 0) return samples
+  const walked = [0]
+  for (let i = 1; i < samples.length; i += 1) {
+    walked.push(walked[i - 1] + Math.hypot(samples[i].x - samples[i - 1].x, samples[i].y - samples[i - 1].y))
+  }
+  const total = walked[walked.length - 1]
+  if (total <= 0) return []
+  const target = total * t
+  for (let i = 1; i < samples.length; i += 1) {
+    if (walked[i] + 0.001 < target) continue
+    const span = walked[i] - walked[i - 1] || 1
+    const u = (target - walked[i - 1]) / span
+    return [
+      {
+        x: samples[i - 1].x + (samples[i].x - samples[i - 1].x) * u,
+        y: samples[i - 1].y + (samples[i].y - samples[i - 1].y) * u,
+      },
+      ...samples.slice(i),
+    ]
+  }
+  return []
 }
 
 function toLocal(box: SceneObject, point: Point): Point {
@@ -190,14 +258,18 @@ export function nearestBox(boxes: SceneObject[], point: Point, maxDist: number):
   return best
 }
 
-export function arrowHeadPoints(samples: Point[], width: number): string {
+export function arrowHeadPath(samples: Point[], width: number): string {
+  if (samples.length < 2) return ''
   const end = samples[samples.length - 1]
   const before = samples[Math.max(0, samples.length - 2)]
   const angle = Math.atan2(end.y - before.y, end.x - before.x)
-  const length = Math.max(10, width * 4)
-  const a = [end.x - length * Math.cos(angle - Math.PI / 7), end.y - length * Math.sin(angle - Math.PI / 7)]
-  const b = [end.x - length * Math.cos(angle + Math.PI / 7), end.y - length * Math.sin(angle + Math.PI / 7)]
-  return `${end.x},${end.y} ${a[0]},${a[1]} ${b[0]},${b[1]}`
+  const length = Math.max(11, width * 6)
+  const spread = Math.PI / 6.5
+  const ax = end.x - length * Math.cos(angle - spread)
+  const ay = end.y - length * Math.sin(angle - spread)
+  const bx = end.x - length * Math.cos(angle + spread)
+  const by = end.y - length * Math.sin(angle + spread)
+  return `M ${ax} ${ay} L ${end.x} ${end.y} L ${bx} ${by}`
 }
 
 function projectSegment(start: Point, end: Point, x: number, y: number): { point: Point; dist: number } {

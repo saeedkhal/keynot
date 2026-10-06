@@ -21,7 +21,8 @@ export type SceneObject = {
   radius: number
   stroke: string
   strokeWidth: number
-  strokeStyle: 'solid' | 'dashed'
+  strokeStyle: 'solid' | 'dashed' | 'dotted'
+  roughness: number
   shadow: boolean
   locked: boolean
   textVAlign: 'center' | 'top'

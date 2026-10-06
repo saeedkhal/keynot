@@ -1,5 +1,5 @@
 import type { Doc, SceneObject } from './types'
-import { arrowHeadPoints, pathOf, trimPath } from './path'
+import { arrowHeadPath, dashOf, outlinePoints, pathOf, roughen, trimPath } from './path'
 
 function tracePath(ctx: CanvasRenderingContext2D, points: { x: number; y: number }[]) {
   ctx.beginPath()
@@ -25,28 +25,50 @@ export function paintScene(ctx: CanvasRenderingContext2D, doc: Doc, objects: Sce
   ctx.fillStyle = doc.background
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
   const scale = ctx.canvas.width / doc.width
+  ctx.save()
+  ctx.strokeStyle = 'rgba(233, 236, 239, 0.08)'
+  ctx.lineWidth = 1
+  const grid = 20 * scale
+  for (let x = grid; x < ctx.canvas.width; x += grid) {
+    ctx.beginPath()
+    ctx.moveTo(x, 0)
+    ctx.lineTo(x, ctx.canvas.height)
+    ctx.stroke()
+  }
+  for (let y = grid; y < ctx.canvas.height; y += grid) {
+    ctx.beginPath()
+    ctx.moveTo(0, y)
+    ctx.lineTo(ctx.canvas.width, y)
+    ctx.stroke()
+  }
+  ctx.restore()
   ctx.setTransform(scale, 0, 0, scale, 0, 0)
   for (const object of objects) {
     ctx.save()
     ctx.globalAlpha = Math.max(0, Math.min(1, object.opacity))
     if (object.type === 'arrow') {
-      const samples = trimPath(pathOf(object), object.light)
+      const seed = object.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 1)
+      const width = object.strokeWidth || 1.5
+      const samples = roughen(trimPath(pathOf(object), object.light), object.roughness ?? 0, seed)
       if (samples.length >= 2) {
-        const width = object.strokeWidth || 3
         ctx.lineCap = 'round'
         ctx.lineJoin = 'round'
         ctx.strokeStyle = object.stroke
         ctx.lineWidth = width
+        const dash = dashOf(object.strokeStyle, width)
+        ctx.setLineDash(dash ? dash.split(' ').map(Number) : [])
         tracePath(ctx, samples)
         ctx.stroke()
-        ctx.fillStyle = object.stroke
-        const head = arrowHeadPoints(samples, width).split(' ').map((pair) => pair.split(',').map(Number))
-        ctx.beginPath()
-        ctx.moveTo(head[0][0], head[0][1])
-        ctx.lineTo(head[1][0], head[1][1])
-        ctx.lineTo(head[2][0], head[2][1])
-        ctx.closePath()
-        ctx.fill()
+        ctx.setLineDash([])
+        const head = arrowHeadPath(samples, width)
+        if (head) {
+          const nums = head.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? []
+          ctx.beginPath()
+          ctx.moveTo(nums[0], nums[1])
+          ctx.lineTo(nums[2], nums[3])
+          ctx.lineTo(nums[4], nums[5])
+          ctx.stroke()
+        }
       }
       ctx.restore()
       continue
@@ -71,18 +93,27 @@ export function paintScene(ctx: CanvasRenderingContext2D, doc: Doc, objects: Sce
     if (object.strokeWidth > 0 && object.stroke !== 'transparent') {
       ctx.strokeStyle = object.stroke
       ctx.lineWidth = object.strokeWidth
-      roundedRect(ctx, object.x + inset, object.y + inset, Math.max(0, object.w - inset * 2), Math.max(0, object.h - inset * 2), object.radius)
-      if (object.strokeStyle === 'dashed') {
-        const dash = Math.max(6, object.strokeWidth * 3)
-        const gap = Math.max(4, object.strokeWidth * 2)
-        ctx.setLineDash([dash, gap])
+      ctx.lineJoin = 'round'
+      ctx.lineCap = 'round'
+      const dash = dashOf(object.strokeStyle, object.strokeWidth)
+      ctx.setLineDash(dash ? dash.split(' ').map(Number) : [])
+      if ((object.roughness ?? 0) >= 0.5) {
+        const seed = object.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 3)
+        const loop = roughen(outlinePoints(object.w, object.h, object.radius), object.roughness, seed).map((point) => ({
+          x: object.x + point.x,
+          y: object.y + point.y,
+        }))
+        tracePath(ctx, loop)
+        ctx.closePath()
+      } else {
+        roundedRect(ctx, object.x + inset, object.y + inset, Math.max(0, object.w - inset * 2), Math.max(0, object.h - inset * 2), object.radius)
       }
       ctx.stroke()
       ctx.setLineDash([])
     }
     if (object.text) {
       ctx.fillStyle = object.textColor
-      ctx.font = `${object.fontSize}px ${object.font === 'sans' ? 'sans-serif' : 'monospace'}`
+      ctx.font = `${object.fontSize}px Virgil, sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = object.textVAlign === 'top' ? 'top' : 'middle'
       const ty = object.textVAlign === 'top' ? object.y + 16 : object.y + object.h / 2

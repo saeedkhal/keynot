@@ -1,24 +1,28 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { arrowHeadPoints, pathOf, smoothSamples, toSvgPath, trimPath } from './path'
+import { arrowHeadPath, dashOf, outlinePoints, pathOf, restPath, roughen, smoothSamples, toSvgPath, trimPath } from './path'
 import type { Guide, Handle, SceneObject } from './types'
 
 const HANDLES: Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
-function ArrowShape({ object, interactive, selected, onPointerDownObject, onDoubleClickObject }: {
+function ArrowShape({ object, interactive, showHidden, zIndex, onPointerDownObject, onDoubleClickObject }: {
   object: SceneObject
   interactive: boolean
-  selected: boolean
+  showHidden: boolean
+  zIndex: number
   onPointerDownObject?: (event: ReactPointerEvent, id: string) => void
   onDoubleClickObject?: (event: ReactMouseEvent, id: string) => void
 }) {
-  const full = smoothSamples(pathOf(object))
-  const drawn = trimPath(pathOf(object), object.light)
-  const width = object.strokeWidth || 3
-  const fullLine = toSvgPath(full)
+  const seed = object.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 1)
+  const drawn = roughen(trimPath(pathOf(object), object.light), object.roughness ?? 0, seed)
+  const hidden = restPath(pathOf(object), object.light)
+  const width = object.strokeWidth || 1.5
+  const dash = dashOf(object.strokeStyle, width)
+  const fullLine = toSvgPath(smoothSamples(pathOf(object)))
   const line = toSvgPath(drawn)
+  const hiddenLine = toSvgPath(hidden)
   const show = drawn.length >= 2
   return (
-    <svg key={object.id} className="arrow" data-object-id={object.id} style={{ opacity: object.opacity, zIndex: selected ? 5 : 2 }}>
+    <svg key={object.id} className="arrow" data-object-id={object.id} style={{ opacity: object.opacity, zIndex }}>
       <path
         d={fullLine}
         stroke={object.stroke}
@@ -30,11 +34,13 @@ function ArrowShape({ object, interactive, selected, onPointerDownObject, onDoub
         onPointerDown={interactive ? (event) => onPointerDownObject?.(event, object.id) : undefined}
         onDoubleClick={interactive ? (event) => onDoubleClickObject?.(event, object.id) : undefined}
       />
-      {selected && object.light < 0.995 && (
-        <path className="arrow-rest" d={fullLine} stroke={object.stroke} strokeWidth={Math.max(1, width * 0.35)} strokeDasharray="5 6" fill="none" opacity={0.45} />
+      {showHidden && hidden.length >= 2 && (
+        <path className="arrow-rest" d={hiddenLine} stroke={object.stroke} strokeWidth={Math.max(1, width * 0.35)} strokeDasharray="5 6" fill="none" opacity={0.35} />
       )}
-      {show && <path className="arrow-line" d={line} stroke={object.stroke} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" fill="none" />}
-      {show && <polygon className="arrow-head" points={arrowHeadPoints(drawn, width)} fill={object.stroke} />}
+      {show && <path className="arrow-line" d={line} stroke={object.stroke} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" strokeDasharray={dash || undefined} fill="none" />}
+      {show && (
+        <path className="arrow-head" d={arrowHeadPath(drawn, width)} stroke={object.stroke} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      )}
     </svg>
   )
 }
@@ -75,27 +81,43 @@ export function SceneView({
   const selected = new Set(selectedIds)
   const connected = new Set(connectIds ?? [])
   return (
-    <div className="stage" data-testid={testId} style={{ width, height, background }}>
-      {objects.map((object) => {
+    <div
+      className="stage"
+      data-testid={testId}
+      style={{
+        width,
+        height,
+        backgroundColor: background,
+        backgroundImage: 'linear-gradient(rgba(233,236,239,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(233,236,239,0.08) 1px, transparent 1px)',
+        backgroundSize: '20px 20px',
+      }}
+    >
+      {objects.map((object, index) => {
         const isSelected = selected.has(object.id)
+        const zIndex = index + 1
         if (object.type === 'arrow') {
           return (
             <ArrowShape
               key={object.id}
               object={object}
               interactive={interactive}
-              selected={isSelected}
+              showHidden={interactive}
+              zIndex={zIndex}
               onPointerDownObject={onPointerDownObject}
               onDoubleClickObject={onDoubleClickObject}
             />
           )
         }
         const editing = editingId === object.id
+        const rough = (object.roughness ?? 0) >= 0.5
+        const seed = object.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 3)
+        const outline = toSvgPath(roughen(outlinePoints(object.w, object.h, object.radius), object.roughness ?? 0, seed))
+        const kind = object.strokeStyle === 'dashed' ? 'dashed' : object.strokeStyle === 'dotted' ? 'dotted' : 'solid'
         return (
           <div
             key={object.id}
             data-object-id={object.id}
-            className={['obj', isSelected ? 'is-selected' : '', connected.has(object.id) ? 'is-connect' : ''].filter(Boolean).join(' ')}
+            className={['obj', object.type === 'label' ? 'is-label' : '', isSelected ? 'is-selected' : '', connected.has(object.id) ? 'is-connect' : ''].filter(Boolean).join(' ')}
             style={{
               left: object.x,
               top: object.y,
@@ -106,18 +128,23 @@ export function SceneView({
               background: object.fill === 'transparent' ? 'transparent' : object.fill,
               color: object.textColor,
               borderRadius: object.radius,
-              border: object.strokeWidth > 0 ? `${object.strokeWidth}px ${object.strokeStyle === 'dashed' ? 'dashed' : 'solid'} ${object.stroke}` : 'none',
+              border: !rough && object.strokeWidth > 0 ? `${object.strokeWidth}px ${kind} ${object.stroke}` : 'none',
               boxShadow: object.shadow ? '0 10px 22px rgba(40, 32, 22, 0.12)' : 'none',
               fontSize: object.fontSize,
-              fontFamily: object.font === 'mono' ? 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' : 'system-ui, sans-serif',
+              fontFamily: 'Virgil, system-ui, sans-serif',
               alignItems: object.textVAlign === 'top' ? 'flex-start' : 'center',
               paddingTop: object.textVAlign === 'top' ? 16 : 0,
-              zIndex: isSelected ? 4 : 1,
+              zIndex,
               cursor: object.locked ? 'default' : 'grab',
             }}
             onPointerDown={interactive ? (event) => onPointerDownObject?.(event, object.id) : undefined}
             onDoubleClick={interactive ? (event) => onDoubleClickObject?.(event, object.id) : undefined}
           >
+            {rough && object.strokeWidth > 0 && (
+              <svg className="obj-stroke" viewBox={`0 0 ${object.w} ${object.h}`} width={object.w} height={object.h}>
+                <path d={outline} stroke={object.stroke} strokeWidth={object.strokeWidth} strokeDasharray={dashOf(kind, object.strokeWidth) || undefined} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              </svg>
+            )}
             {editing ? (
               <input
                 className="obj-edit"
@@ -163,17 +190,21 @@ export function SceneView({
           .filter((object) => object.type === 'arrow' && selected.has(object.id) && !object.locked)
           .map((object) => (
             <div key={`${object.id}-ends`}>
-              {pathOf(object).map((point, index) => (
+              {pathOf(object).map((point, index, points) => {
+                const tip = index === 0 || index === points.length - 1
+                const size = tip ? 12 : 8
+                return (
                 <i
                   key={`${object.id}-${index}`}
-                  className="handle handle-end"
-                  style={{ left: point.x - 6, top: point.y - 6 }}
+                  className={tip ? 'handle handle-end' : 'handle handle-end handle-end-mid'}
+                  style={{ left: point.x - size / 2, top: point.y - size / 2 }}
                   onPointerDown={(event) => {
                     event.stopPropagation()
                     onHandleDown?.(event, object.id, index)
                   }}
                 />
-              ))}
+                )
+              })}
             </div>
           ))}
       {(guides ?? []).map((guide) => (

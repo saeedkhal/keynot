@@ -21,16 +21,17 @@ export function baseObject(partial: Partial<SceneObject> & Pick<SceneObject, 'id
     y2: 80,
     rotation: 0,
     opacity: 1,
-    fill: '#22242e',
+    fill: 'transparent',
     text: '',
-    textColor: '#ffffff',
-    fontSize: 16,
-    font: 'mono',
-    radius: 12,
-    stroke: '#1c1915',
-    strokeWidth: 0,
+    textColor: '#f8f9fa',
+    fontSize: 20,
+    font: 'sans',
+    radius: 10,
+    stroke: '#e9ecef',
+    strokeWidth: 1.5,
     strokeStyle: 'solid',
-    shadow: true,
+    roughness: 0,
+    shadow: false,
     locked: false,
     textVAlign: 'center',
     groupId: null,
@@ -42,7 +43,8 @@ export function baseObject(partial: Partial<SceneObject> & Pick<SceneObject, 'id
   }
   return {
     ...object,
-    strokeStyle: object.strokeStyle === 'dashed' ? 'dashed' : 'solid',
+    strokeStyle: object.strokeStyle === 'dashed' || object.strokeStyle === 'dotted' ? object.strokeStyle : 'solid',
+    roughness: object.roughness === 1 || object.roughness === 2 ? object.roughness : 0,
     startBound: object.startBound || null,
     endBound: object.endBound || null,
   }
@@ -85,12 +87,21 @@ export function normalize(input: Doc): Doc {
             ...object,
             id: object.id || uid(),
             type: object.type || 'card',
-            strokeStyle: object.strokeStyle === 'dashed' ? 'dashed' : 'solid',
+            strokeStyle: object.strokeStyle === 'dashed' || object.strokeStyle === 'dotted' ? object.strokeStyle : 'solid',
+            roughness: typeof object.roughness === 'number' ? object.roughness : 0,
           }),
-        ),
+        ).map((object) => fitLabel(object)),
       ),
     })),
   }
+}
+
+export function moveSlide(doc: Doc, from: number, to: number): Doc {
+  if (from === to || from < 0 || to < 0 || from >= doc.slides.length || to >= doc.slides.length) return doc
+  const slides = doc.slides.slice()
+  const [slide] = slides.splice(from, 1)
+  slides.splice(to, 0, slide)
+  return { ...doc, slides }
 }
 
 export function addSlide(doc: Doc, index: number): Doc {
@@ -280,6 +291,33 @@ export function distributeObjects(objects: SceneObject[], ids: string[], axis: '
   })
 }
 
+let labelMeasure: CanvasRenderingContext2D | null = null
+
+export function measureLabel(text: string, fontSize: number, strokeWidth = 0): { w: number; h: number } {
+  const content = text.length > 0 ? text : ' '
+  let textWidth = content.length * fontSize * 0.52
+  if (typeof document !== 'undefined') {
+    if (!labelMeasure) labelMeasure = document.createElement('canvas').getContext('2d')
+    if (labelMeasure) {
+      labelMeasure.font = `${fontSize}px Virgil, system-ui, sans-serif`
+      textWidth = labelMeasure.measureText(content).width
+    }
+  }
+  return {
+    w: Math.max(fontSize, textWidth + 20 + strokeWidth),
+    h: Math.max(fontSize, fontSize * 1.45 + 8 + strokeWidth),
+  }
+}
+
+export function fitLabel(object: SceneObject): SceneObject {
+  if (object.type !== 'label') return object
+  const box = measureLabel(object.text, object.fontSize, object.strokeWidth)
+  if (Math.abs(object.w - box.w) < 0.5 && Math.abs(object.h - box.h) < 0.5) return object
+  const cx = object.x + object.w / 2
+  const cy = object.y + object.h / 2
+  return { ...object, w: box.w, h: box.h, x: cx - box.w / 2, y: cy - box.h / 2 }
+}
+
 export function resized(start: SceneObject, handle: Handle, worldDx: number, worldDy: number): SceneObject {
   const rad = (-start.rotation * Math.PI) / 180
   const cos = Math.cos(rad)
@@ -305,8 +343,24 @@ export function resized(start: SceneObject, handle: Handle, worldDx: number, wor
     if (handle.includes('n')) top = bottom - min
     else bottom = top + min
   }
-  const newW = right - left
-  const newH = bottom - top
+  let newW = right - left
+  let newH = bottom - top
+  let fontSize = start.fontSize
+  if (start.type === 'label' && start.w > 0 && start.h > 0) {
+    const scale = Math.hypot(newW, newH) / Math.hypot(start.w, start.h)
+    fontSize = Math.max(1, start.fontSize * scale)
+    const fitted = measureLabel(start.text, fontSize, start.strokeWidth)
+    if (handle.includes('e')) left = handle.includes('w') ? -fitted.w / 2 : -start.w / 2
+    else if (handle.includes('w')) left = start.w / 2 - fitted.w
+    else left = -fitted.w / 2
+    right = left + fitted.w
+    if (handle.includes('s')) top = handle.includes('n') ? -fitted.h / 2 : -start.h / 2
+    else if (handle.includes('n')) top = start.h / 2 - fitted.h
+    else top = -fitted.h / 2
+    bottom = top + fitted.h
+    newW = fitted.w
+    newH = fitted.h
+  }
   const localCx = (left + right) / 2
   const localCy = (top + bottom) / 2
   const rot = (start.rotation * Math.PI) / 180
@@ -318,6 +372,7 @@ export function resized(start: SceneObject, handle: Handle, worldDx: number, wor
     h: newH,
     x: cx + shiftX - newW / 2,
     y: cy + shiftY - newH / 2,
+    fontSize,
   }
 }
 
@@ -376,9 +431,14 @@ export function addCard(doc: Doc, index: number): { doc: Doc; id: string } {
     y: doc.height / 2 - 26 + (n % 4) * 16,
     w: 180,
     h: 52,
-    fill: '#22242e',
+    fill: 'transparent',
     text: 'label',
-    shadow: true,
+    textColor: '#f8f9fa',
+    font: 'sans',
+    radius: 10,
+    stroke: '#e9ecef',
+    strokeWidth: 1.5,
+    shadow: false,
   })
   return { doc: withObjects(doc, index, [...slide.objects, object]), id }
 }
@@ -386,7 +446,7 @@ export function addCard(doc: Doc, index: number): { doc: Doc; id: string } {
 export function addLabel(doc: Doc, index: number): { doc: Doc; id: string } {
   const slide = doc.slides[index]
   const id = uid()
-  const object = baseObject({
+  const object = fitLabel(baseObject({
     id,
     type: 'label',
     x: 48,
@@ -399,7 +459,8 @@ export function addLabel(doc: Doc, index: number): { doc: Doc; id: string } {
     fontSize: 22,
     shadow: false,
     radius: 0,
-  })
+    strokeWidth: 0,
+  }))
   return { doc: withObjects(doc, index, [...slide.objects, object]), id }
 }
 
@@ -410,8 +471,8 @@ export function addArrow(doc: Doc, index: number): { doc: Doc; id: string } {
     baseObject({
       id,
       type: 'arrow',
-      stroke: '#ffffff',
-      strokeWidth: 3,
+      stroke: '#e9ecef',
+      strokeWidth: 1.5,
       fill: '#ffffff',
       shadow: false,
       light: 1,
