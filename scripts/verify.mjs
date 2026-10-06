@@ -11,6 +11,7 @@ page.on('pageerror', (error) => errors.push(error.message))
 await page.goto('http://127.0.0.1:5173', { waitUntil: 'networkidle' })
 await page.getByText('call stack').first().waitFor()
 
+await page.getByTestId('app-menu').click()
 await page.getByTestId('present').click()
 await page.getByTestId('presenter').waitFor()
 const presentStart = await page.locator('[data-testid="present-stage"] [data-object-id="card-main"]').evaluate((node) => node.style.left)
@@ -25,10 +26,12 @@ await page.keyboard.press('Escape')
 await page.getByTestId('presenter').waitFor({ state: 'hidden' })
 
 const before = await page.locator('[data-testid="stage"] [data-object-id="card-main"]').evaluate((node) => node.style.left)
+await page.getByTestId('app-menu').click()
 await page.getByTestId('play').click()
 await page.waitForTimeout(800)
 const during = await page.locator('[data-testid="stage"] [data-object-id="card-main"]').evaluate((node) => node.style.left)
 if (before === during) throw new Error(`card did not move during play (${before})`)
+await page.getByTestId('app-menu').click()
 await page.getByTestId('play').click()
 
 await page.getByTestId('duplicate-slide').click()
@@ -154,7 +157,7 @@ if (!(cardNow.x > cardDoc.x + 8) || !stillOn || stillEdge > 2) {
 
 const [download] = await Promise.all([
   page.waitForEvent('download', { timeout: 60000 }),
-  page.getByTestId('export-gif').click(),
+  page.getByTestId('app-menu').click().then(() => page.getByTestId('export-gif').click()),
 ])
 const path = await download.path()
 const size = path ? (await import('node:fs')).statSync(path).size : 0

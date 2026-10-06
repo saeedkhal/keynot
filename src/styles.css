@@ -52,6 +52,39 @@ button.primary {
   color: white;
 }
 
+button.tool {
+  position: relative;
+  width: 36px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+button.tool[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 8px);
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #2a2622;
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 30;
+}
+
+button.tool[data-tip]:hover::after,
+button.tool[data-tip]:focus-visible::after {
+  opacity: 1;
+}
+
 .app {
   height: 100%;
   display: grid;
@@ -95,6 +128,42 @@ button.primary {
 }
 
 .grow { flex: 1; }
+
+.menu { position: relative; z-index: 40; }
+
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.menu > .tool { position: relative; z-index: 41; }
+
+.menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  min-width: 168px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.45);
+}
+
+.menu-panel button {
+  width: 100%;
+  text-align: left;
+}
 
 .workspace {
   display: grid;

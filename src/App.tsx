@@ -100,6 +100,7 @@ export function App() {
   const [presentObjects, setPresentObjects] = useState<SceneObject[] | null>(null)
   const [presentScale, setPresentScale] = useState({ x: 1, y: 1 })
   const [status, setStatus] = useState('Duplicate a slide, move the same cards, then Play.')
+  const [menuOpen, setMenuOpen] = useState(false)
   const live = useRef(doc)
   const presentingRef = useRef(false)
   const advancingRef = useRef(false)
@@ -112,6 +113,7 @@ export function App() {
   const stageRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const fileHandle = useRef<FileSystemFileHandle | null>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   presentingRef.current = presenting
   const { setSlot, scaleX, scaleY } = useFitScale(doc.width, doc.height)
   live.current = doc
@@ -146,6 +148,22 @@ export function App() {
       cancel = true
     }
   }, [])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const close = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuOpen(false)
+    }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -616,9 +634,15 @@ export function App() {
           <strong>Keynot</strong>
           <span>Magic Move</span>
         </div>
-        <button type="button" data-testid="add-card" onClick={() => { const result = addCard(doc, index); commit(result.doc); setSelectedIds([result.id]) }}>Card</button>
-        <button type="button" data-testid="add-arrow" onClick={() => { const result = addArrow(doc, index); commit(result.doc); setSelectedIds([result.id]) }}>Arrow</button>
-        <button type="button" onClick={() => { const result = addLabel(doc, index); commit(result.doc); setSelectedIds([result.id]) }}>Label</button>
+        <button type="button" className="tool" data-tip="Card" aria-label="Card" data-testid="add-card" onClick={() => { const result = addCard(doc, index); commit(result.doc); setSelectedIds([result.id]) }}>
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="3" fill="none" stroke="currentColor" strokeWidth="1.8" /></svg>
+        </button>
+        <button type="button" className="tool" data-tip="Arrow" aria-label="Arrow" data-testid="add-arrow" onClick={() => { const result = addArrow(doc, index); commit(result.doc); setSelectedIds([result.id]) }}>
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 12 H16 M12 7 L18 12 L12 17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        </button>
+        <button type="button" className="tool" data-tip="Label" aria-label="Label" onClick={() => { const result = addLabel(doc, index); commit(result.doc); setSelectedIds([result.id]) }}>
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 18 L12 6 L17 18 M9 14 H15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        </button>
         <i className="sep" />
         <button
           type="button"
@@ -633,14 +657,28 @@ export function App() {
         </button>
         <button
           type="button"
+          className="tool"
+          data-tip="Group"
+          aria-label="Group"
           disabled={selectedIds.length < 2}
           onClick={() => updateSelected({ groupId: `g_${Math.random().toString(36).slice(2, 8)}` })}
         >
-          Group
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="3" y="7" width="10" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" /><rect x="11" y="3" width="10" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" /></svg>
         </button>
         <button type="button" disabled={!selected.length} onClick={() => updateSelected({ groupId: null })}>Ungroup</button>
-        <button type="button" disabled={!selected.length} onClick={() => updateSelected({ locked: !selected.every((object) => object.locked) })}>
-          {selected.every((object) => object.locked) && selected.length ? 'Unlock' : 'Lock'}
+        <button
+          type="button"
+          className="tool"
+          data-tip={selected.every((object) => object.locked) && selected.length ? 'Unlock' : 'Lock'}
+          aria-label={selected.every((object) => object.locked) && selected.length ? 'Unlock' : 'Lock'}
+          disabled={!selected.length}
+          onClick={() => updateSelected({ locked: !selected.every((object) => object.locked) })}
+        >
+          {selected.every((object) => object.locked) && selected.length ? (
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 11 V8 a4 4 0 0 1 7.2 -2.4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" /></svg>
+          ) : (
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 11 V8 a4 4 0 0 1 8 0 V11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" /></svg>
+          )}
         </button>
         <button
           type="button"
@@ -654,29 +692,30 @@ export function App() {
           Delete
         </button>
         <span className="grow" />
-        <button type="button" disabled={!past.length} onClick={undo}>Undo</button>
-        <button type="button" disabled={!future.length} onClick={redo}>Redo</button>
-        <button type="button" data-testid="play" className="primary" onClick={() => setPlaying((value) => !value)}>
-          {playing ? 'Stop' : 'Play'}
-        </button>
-        <button
-          type="button"
-          data-testid="present"
-          className="primary"
-          onClick={() => {
-            setPlaying(false)
-            setPresenting(true)
-          }}
-        >
-          Present
-        </button>
-        <button type="button" data-testid="save" onClick={() => void saveFile()}>Save</button>
-        <button type="button" data-testid="export-gif" className="primary" disabled={exporting} onClick={() => onExport('gif')}>
-          {exporting ? 'Exporting…' : 'Export GIF'}
-        </button>
-        <button type="button" data-testid="export-mp4" className="primary" disabled={exporting} onClick={() => onExport('mp4')}>
-          {exporting ? 'Exporting…' : 'Export MP4'}
-        </button>
+        <div className="menu" ref={menuRef}>
+          {menuOpen && <button type="button" className="menu-backdrop" aria-label="Close menu" onClick={() => setMenuOpen(false)} />}
+          <button
+            type="button"
+            className="tool"
+            data-testid="app-menu"
+            aria-label="Menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 7 H20 M4 12 H20 M4 17 H20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+          </button>
+          {menuOpen && (
+            <div className="menu-panel" role="menu">
+              <button type="button" role="menuitem" disabled={!past.length} onClick={() => { setMenuOpen(false); undo() }}>Undo</button>
+              <button type="button" role="menuitem" disabled={!future.length} onClick={() => { setMenuOpen(false); redo() }}>Redo</button>
+              <button type="button" role="menuitem" data-testid="play" onClick={() => { setMenuOpen(false); setPlaying((value) => !value) }}>{playing ? 'Stop' : 'Play'}</button>
+              <button type="button" role="menuitem" data-testid="present" onClick={() => { setMenuOpen(false); setPlaying(false); setPresenting(true) }}>Present</button>
+              <button type="button" role="menuitem" data-testid="save" onClick={() => { setMenuOpen(false); void saveFile() }}>Save</button>
+              <button type="button" role="menuitem" data-testid="export-gif" disabled={exporting} onClick={() => { setMenuOpen(false); void onExport('gif') }}>{exporting ? 'Exporting…' : 'Export GIF'}</button>
+              <button type="button" role="menuitem" data-testid="export-mp4" disabled={exporting} onClick={() => { setMenuOpen(false); void onExport('mp4') }}>{exporting ? 'Exporting…' : 'Export MP4'}</button>
+            </div>
+          )}
+        </div>
       </header>
       <div className="workspace">
         <aside className="film">
