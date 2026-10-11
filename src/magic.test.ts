@@ -1,4 +1,5 @@
-import { alignObjects, baseObject, measureLabel, orderObjects, resized, settleBindings, snapMove, translateObject } from './doc'
+import { alignObjects, baseObject, dragTargets, marqueeTargets, measureLabel, orderObjects, resized, rotateObjects, scaleObjects, settleBindings, snapMove, translateObject } from './doc'
+import { arrowSketch, shapeSketch } from './sketch'
 import { exampleDoc } from './example'
 import { applyEase, frameBetween, parseColor, sampleAt, totalSeconds } from './magic'
 import { insertPoint, pathLength, pathOf, restPath, trimPath, withPath } from './path'
@@ -143,5 +144,52 @@ assert(idsOf(orderObjects(stack, ['b'], 'forward')) === 'a,c,b', 'forward moves 
 assert(idsOf(orderObjects(stack, ['b'], 'backward')) === 'b,a,c', 'backward moves one step toward the back')
 assert(idsOf(orderObjects(stack, ['b'], 'front')) === 'a,c,b', 'front puts the selection on top')
 assert(idsOf(orderObjects(stack, ['b'], 'back')) === 'b,a,c', 'back puts the selection behind everything')
+
+const grouped = [
+  baseObject({ id: 'a', type: 'card', x: 0, y: 0, w: 100, h: 40, groupId: 'g' }),
+  baseObject({ id: 'b', type: 'card', x: 200, y: 0, w: 100, h: 40, groupId: 'g' }),
+  baseObject({ id: 'c', type: 'card', x: 0, y: 80, w: 40, h: 40, groupId: null }),
+]
+assert(dragTargets(grouped, [], 'a', false).join(',') === 'a,b', 'clicking one grouped item targets the whole group')
+assert(dragTargets(grouped, ['a', 'c'], 'a', false).join(',') === 'a,b,c', 'dragging a selection keeps every selected item and its group')
+assert(dragTargets(grouped, ['c'], 'a', false).join(',') === 'a,b', 'clicking outside the selection selects the group')
+assert(dragTargets(grouped, ['a', 'b', 'c'], 'a', true).join(',') === 'c', 'shift-click removes the whole group from the selection')
+const loose = [
+  baseObject({ id: 'p', type: 'card', x: 0, y: 0, w: 40, h: 40 }),
+  baseObject({ id: 'q', type: 'card', x: 80, y: 0, w: 40, h: 40 }),
+  baseObject({ id: 'locked', type: 'card', x: 0, y: 0, w: 300, h: 80, locked: true }),
+  baseObject({ id: 'g1', type: 'card', x: 0, y: 100, w: 30, h: 30, groupId: 'g' }),
+  baseObject({ id: 'g2', type: 'card', x: 80, y: 100, w: 30, h: 30, groupId: 'g' }),
+]
+assert(marqueeTargets(loose, { x: -4, y: -4, w: 50, h: 50 }).join(',') === 'p', 'a drag box selects the card it covers')
+assert(marqueeTargets(loose, { x: -4, y: -4, w: 130, h: 50 }).join(',') === 'p,q', 'a drag box selects every card it covers')
+assert(!marqueeTargets(loose, { x: -4, y: -4, w: 260, h: 50 }).includes('locked'), 'a drag box skips locked items')
+assert(marqueeTargets(loose, { x: -4, y: 90, w: 40, h: 40 }).join(',') === 'g1,g2', 'a drag box selects the whole group when it touches one member')
+assert(marqueeTargets(loose, { x: 70, y: -4, w: 60, h: 50 }, ['p']).join(',') === 'p,q', 'shift-drag keeps what was already selected')
+const scaled = scaleObjects(grouped, ['a', 'b'], 'se', 100, 40)
+const scaledA = scaled.find((object) => object.id === 'a')
+const scaledB = scaled.find((object) => object.id === 'b')
+assert(!!scaledA && Math.abs(scaledA.w - 400 / 3) < 0.01 && Math.abs(scaledA.h - 80) < 0.01, 'group resize scales the first card from the opposite corner')
+assert(!!scaledB && Math.abs(scaledB.x - 800 / 3) < 0.01 && scaledCStays(scaled), 'group resize moves the second card and leaves the outsider')
+const turned = rotateObjects(grouped, ['a', 'b'], 180)
+const turnedA = turned.find((object) => object.id === 'a')
+const turnedB = turned.find((object) => object.id === 'b')
+assert(!!turnedA && Math.abs(turnedA.x - 200) < 0.01 && Math.abs(turnedA.y) < 0.01 && turnedA.rotation === 180, 'group rotate spins the first card around the selection')
+assert(!!turnedB && Math.abs(turnedB.x) < 0.01 && turned.find((object) => object.id === 'c')?.x === 0, 'group rotate swaps the second card and leaves the outsider')
+
+const cleanSketch = shapeSketch(baseObject({ id: 'box', type: 'card', w: 180, h: 52, roughness: 0, radius: 0 }))
+assert(cleanSketch === null, 'sloppiness 0 stays a clean stroke')
+const artist = shapeSketch(baseObject({ id: 'box', type: 'card', w: 180, h: 52, roughness: 1, radius: 0, strokeWidth: 2 }))
+const cartoon = shapeSketch(baseObject({ id: 'box', type: 'card', w: 180, h: 52, roughness: 2, radius: 0, strokeWidth: 2 }))
+assert(!!artist && artist.stroke.includes('C') && artist.stroke.split('M').length > 5, 'sloppiness 1 bows each edge and draws a second stroke')
+assert(!!artist && !!cartoon && cartoon.stroke !== artist.stroke, 'sloppiness 2 sketches a different, looser stroke')
+const roundSketch = shapeSketch(baseObject({ id: 'round', type: 'card', w: 180, h: 52, roughness: 1, radius: 10, fill: '#2b2d42' }))
+assert(!!roundSketch && roundSketch.fill.startsWith('M') && roundSketch.stroke.includes('C'), 'a filled round card gets a sketch fill and a bowed stroke')
+const sloppyArrow = arrowSketch(baseObject({ id: 'arr', type: 'arrow', roughness: 1, light: 1, strokeWidth: 2, points: [{ x: 0, y: 0 }, { x: 120, y: 40 }] }))
+assert(!!sloppyArrow && sloppyArrow.stroke.split('M').length >= 4, 'a sloppy arrow sketches the shaft and both sides of the head')
+
+function scaledCStays(objects: { id: string; x: number }[]) {
+  return objects.find((object) => object.id === 'c')?.x === 0
+}
 
 console.log('magic tests passed')

@@ -1,6 +1,6 @@
 @font-face {
   font-family: Virgil;
-  src: url(/fonts/Virgil-Regular.woff2) format('woff2');
+  src: url(../fonts/Virgil-Regular.woff2) format('woff2');
   font-weight: 400;
   font-style: normal;
   font-display: swap;
@@ -360,6 +360,25 @@ button.tool[data-tip]:focus-visible::after {
 .is-selected {
   outline: 1px solid #a5d8ff;
   outline-offset: 3px;
+}
+
+.selection-frame {
+  position: absolute;
+  z-index: 1000;
+  border: 1px solid #a5d8ff;
+  pointer-events: none;
+}
+
+.selection-frame .handle {
+  pointer-events: auto;
+}
+
+.marquee {
+  position: absolute;
+  z-index: 30;
+  border: 1px solid #a5d8ff;
+  background: rgba(165, 216, 255, 0.16);
+  pointer-events: none;
 }
 
 .obj.is-connect {

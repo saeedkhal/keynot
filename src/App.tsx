@@ -9,6 +9,8 @@ import {
   blankDoc,
   deleteSlide,
   distributeObjects,
+  dragTargets,
+  marqueeTargets,
   duplicateObjects,
   duplicateSlide,
   moveSlide,
@@ -16,6 +18,9 @@ import {
   normalize,
   orderObjects,
   resized,
+  rotateObjects,
+  scaleObjects,
+  selectionBounds,
   settleBindings,
   snapMove,
   translateObject,
@@ -48,7 +53,9 @@ function loadDoc(): Doc {
 type Gesture =
   | { kind: 'move'; ids: string[]; start: Map<string, SceneObject>; x: number; y: number; moved: boolean }
   | { kind: 'resize'; id: string; handle: Handle; start: SceneObject; x: number; y: number }
+  | { kind: 'resize-group'; ids: string[]; handle: Handle; starts: Map<string, SceneObject>; x: number; y: number }
   | { kind: 'rotate'; id: string; start: SceneObject; angle: number }
+  | { kind: 'rotate-group'; ids: string[]; starts: Map<string, SceneObject>; cx: number; cy: number; angle: number }
   | { kind: 'point'; id: string; index: number; start: SceneObject }
 
 function slideShift(index: number, from: number, to: number, slot: number) {
@@ -101,6 +108,7 @@ export function App() {
   const [presentScale, setPresentScale] = useState({ x: 1, y: 1 })
   const [status, setStatus] = useState('Duplicate a slide, move the same cards, then Play.')
   const [menuOpen, setMenuOpen] = useState(false)
+  const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const live = useRef(doc)
   const presentingRef = useRef(false)
   const advancingRef = useRef(false)
@@ -224,18 +232,16 @@ export function App() {
     )
   }
 
-  function selectObject(id: string, shift: boolean) {
-    const object = slide.objects.find((item) => item.id === id)
-    if (!object) return
-    const group = object.groupId ? slide.objects.filter((item) => item.groupId === object.groupId).map((item) => item.id) : [id]
-    setEditingId(null)
-    setSelectedIds((current) => {
-      if (!shift) return group
-      const next = new Set(current)
-      const allOn = group.every((item) => next.has(item))
-      group.forEach((item) => (allOn ? next.delete(item) : next.add(item)))
-      return [...next]
-    })
+  function groupSelected() {
+    if (selectedIds.length < 2) return
+    updateSelected({ groupId: `g_${Math.random().toString(36).slice(2, 8)}` })
+    setStatus('Grouped. Drag one item and the rest follow.')
+  }
+
+  function ungroupSelected() {
+    if (!selectedIds.length) return
+    updateSelected({ groupId: null })
+    setStatus('Ungrouped.')
   }
 
   useEffect(() => {
@@ -377,10 +383,10 @@ export function App() {
         setSelectedIds(result.ids)
       } else if (meta && event.shiftKey && event.key.toLowerCase() === 'g') {
         event.preventDefault()
-        updateSelected({ groupId: null })
+        ungroupSelected()
       } else if (meta && event.key.toLowerCase() === 'g' && selectedIds.length > 1) {
         event.preventDefault()
-        updateSelected({ groupId: `g_${Math.random().toString(36).slice(2, 8)}` })
+        groupSelected()
       } else if (event.key === 'Delete' || event.key === 'Backspace') {
         if (!selectedIds.length) return
         event.preventDefault()
@@ -473,6 +479,14 @@ export function App() {
           }),
           false,
         )
+      } else if (gesture.kind === 'resize-group') {
+        const base = current.map((object) => gesture.starts.get(object.id) ?? object)
+        patchSlide(scaleObjects(base, gesture.ids, gesture.handle, point.x - gesture.x, point.y - gesture.y), false)
+      } else if (gesture.kind === 'rotate-group') {
+        let degrees = (Math.atan2(point.y - gesture.cy, point.x - gesture.cx) - gesture.angle) * (180 / Math.PI)
+        if (event.shiftKey) degrees = Math.round(degrees / 15) * 15
+        const base = current.map((object) => gesture.starts.get(object.id) ?? object)
+        patchSlide(rotateObjects(base, gesture.ids, degrees), false)
       } else if (gesture.kind === 'resize') {
         patchSlide(
           current.map((object) =>
@@ -525,17 +539,36 @@ export function App() {
     event.stopPropagation()
     const object = slide.objects.find((item) => item.id === id)
     if (!object) return
-    selectObject(id, event.shiftKey)
-    const ids = object.groupId ? slide.objects.filter((item) => item.groupId === object.groupId).map((item) => item.id) : [id]
-    const moving = new Set(event.shiftKey ? [...selectedIds, ...ids] : ids)
-    if (slide.objects.some((item) => moving.has(item.id) && item.locked)) return
+    const ids = dragTargets(slide.objects, selectedIds, id, event.shiftKey)
+    setEditingId(null)
+    setSelectedIds(ids)
+    if (object.locked) return
+    const moving = slide.objects.filter((item) => ids.includes(item.id) && !item.locked)
+    if (!moving.length) return
     const point = stagePoint(event)
-    const start = new Map(slide.objects.filter((item) => moving.has(item.id)).map((item) => [item.id, item]))
-    track({ kind: 'move', ids: [...moving], start, x: point.x, y: point.y, moved: false })
+    const start = new Map(moving.map((item) => [item.id, item]))
+    track({ kind: 'move', ids: moving.map((item) => item.id), start, x: point.x, y: point.y, moved: false })
   }
 
   function onHandleDown(event: ReactPointerEvent, id: string, handle: Handle | 'rotate' | number) {
     if (playing) return
+    if (selectedIds.length > 1 && typeof handle === 'string') {
+      const members = slide.objects.filter((item) => selectedIds.includes(item.id) && !item.locked)
+      if (!members.length) return
+      const point = stagePoint(event)
+      const starts = new Map(members.map((item) => [item.id, item]))
+      const memberIds = members.map((item) => item.id)
+      if (handle === 'rotate') {
+        const box = selectionBounds(members)
+        if (!box) return
+        const cx = box.x + box.w / 2
+        const cy = box.y + box.h / 2
+        track({ kind: 'rotate-group', ids: memberIds, starts, cx, cy, angle: Math.atan2(point.y - cy, point.x - cx) })
+      } else {
+        track({ kind: 'resize-group', ids: memberIds, handle, starts, x: point.x, y: point.y })
+      }
+      return
+    }
     const object = slide.objects.find((item) => item.id === id)
     if (!object || object.locked) return
     const point = stagePoint(event)
@@ -573,7 +606,9 @@ export function App() {
 
   async function saveFile() {
     const body = JSON.stringify(live.current)
-    const picker = window.showSaveFilePicker
+    const picker = (window as Window & {
+      showSaveFilePicker?: (options: { suggestedName?: string; types?: { description?: string; accept: Record<string, string[]> }[] }) => Promise<FileSystemFileHandle>
+    }).showSaveFilePicker
     if (picker && !fileHandle.current) {
       try {
         fileHandle.current = await picker({
@@ -661,11 +696,11 @@ export function App() {
           data-tip="Group"
           aria-label="Group"
           disabled={selectedIds.length < 2}
-          onClick={() => updateSelected({ groupId: `g_${Math.random().toString(36).slice(2, 8)}` })}
+          onClick={groupSelected}
         >
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="3" y="7" width="10" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" /><rect x="11" y="3" width="10" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" /></svg>
         </button>
-        <button type="button" disabled={!selected.length} onClick={() => updateSelected({ groupId: null })}>Ungroup</button>
+        <button type="button" disabled={!selected.length} onClick={ungroupSelected}>Ungroup</button>
         <button
           type="button"
           className="tool"
@@ -833,11 +868,38 @@ export function App() {
             <div
               ref={stageRef}
               style={{ width: doc.width, height: doc.height, transform: `scale(${scaleX}, ${scaleY})`, transformOrigin: 'top left' }}
-              onPointerDown={() => {
-                if (!playing) {
-                  setSelectedIds([])
+              onPointerDown={(event) => {
+                if (playing || event.button !== 0) return
+                const start = stagePoint(event)
+                const keep = event.shiftKey ? selectedIds : []
+                let dragged = false
+                const move = (pointer: PointerEvent) => {
+                  const point = stagePoint(pointer)
+                  const dx = point.x - start.x
+                  const dy = point.y - start.y
+                  if (!dragged && Math.hypot(dx, dy) < 4) return
+                  dragged = true
+                  const box = {
+                    x: Math.min(start.x, point.x),
+                    y: Math.min(start.y, point.y),
+                    w: Math.abs(point.x - start.x),
+                    h: Math.abs(point.y - start.y),
+                  }
+                  setMarquee(box)
                   setEditingId(null)
+                  setSelectedIds(marqueeTargets(live.current.slides[index].objects, box, keep))
                 }
+                const up = () => {
+                  window.removeEventListener('pointermove', move)
+                  window.removeEventListener('pointerup', up)
+                  setMarquee(null)
+                  if (!dragged && !event.shiftKey) {
+                    setSelectedIds([])
+                    setEditingId(null)
+                  }
+                }
+                window.addEventListener('pointermove', move)
+                window.addEventListener('pointerup', up)
               }}
             >
               <SceneView
@@ -876,6 +938,9 @@ export function App() {
                 }}
                 onHandleDown={onHandleDown}
               />
+              {marquee && (
+                <div className="marquee" data-testid="marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />
+              )}
             </div>
           </div>
         </main>
@@ -1056,7 +1121,7 @@ export function App() {
               </label>
             </>
           )}
-          {selected.length > 1 && <p className="hint">{selected.length} objects selected. Drag moves the group together.</p>}
+          {selected.length > 1 && <p className="hint">{selected.length} objects selected. Drag one and the rest follow. Group keeps them together after you click away.</p>}
           {selected.length > 1 && (
             <div className="row">
               {(['left', 'center', 'right', 'top', 'middle', 'bottom'] as const).map((mode) => (

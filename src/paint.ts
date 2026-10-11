@@ -1,5 +1,6 @@
 import type { Doc, SceneObject } from './types'
-import { arrowHeadPath, dashOf, outlinePoints, pathOf, roughen, trimPath } from './path'
+import { arrowHeadPath, dashOf, pathOf, trimPath } from './path'
+import { arrowSketch, roughStrokeWidth, shapeSketch } from './sketch'
 
 function tracePath(ctx: CanvasRenderingContext2D, points: { x: number; y: number }[]) {
   ctx.beginPath()
@@ -47,27 +48,32 @@ export function paintScene(ctx: CanvasRenderingContext2D, doc: Doc, objects: Sce
     ctx.save()
     ctx.globalAlpha = Math.max(0, Math.min(1, object.opacity))
     if (object.type === 'arrow') {
-      const seed = object.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 1)
       const width = object.strokeWidth || 1.5
-      const samples = roughen(trimPath(pathOf(object), object.light), object.roughness ?? 0, seed)
+      const samples = trimPath(pathOf(object), object.light)
+      const sketch = arrowSketch(object)
       if (samples.length >= 2) {
         ctx.lineCap = 'round'
         ctx.lineJoin = 'round'
         ctx.strokeStyle = object.stroke
-        ctx.lineWidth = width
-        const dash = dashOf(object.strokeStyle, width)
-        ctx.setLineDash(dash ? dash.split(' ').map(Number) : [])
-        tracePath(ctx, samples)
-        ctx.stroke()
-        ctx.setLineDash([])
-        const head = arrowHeadPath(samples, width)
-        if (head) {
-          const nums = head.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? []
-          ctx.beginPath()
-          ctx.moveTo(nums[0], nums[1])
-          ctx.lineTo(nums[2], nums[3])
-          ctx.lineTo(nums[4], nums[5])
+        ctx.lineWidth = sketch ? roughStrokeWidth(object) : width
+        if (sketch?.stroke) {
+          ctx.setLineDash([])
+          ctx.stroke(new Path2D(sketch.stroke))
+        } else {
+          const dash = dashOf(object.strokeStyle, width)
+          ctx.setLineDash(dash ? dash.split(' ').map(Number) : [])
+          tracePath(ctx, samples)
           ctx.stroke()
+          ctx.setLineDash([])
+          const head = arrowHeadPath(samples, width)
+          if (head) {
+            const nums = head.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? []
+            ctx.beginPath()
+            ctx.moveTo(nums[0], nums[1])
+            ctx.lineTo(nums[2], nums[3])
+            ctx.lineTo(nums[4], nums[5])
+            ctx.stroke()
+          }
         }
       }
       ctx.restore()
@@ -79,7 +85,14 @@ export function paintScene(ctx: CanvasRenderingContext2D, doc: Doc, objects: Sce
     ctx.rotate((object.rotation * Math.PI) / 180)
     ctx.translate(-cx, -cy)
     const inset = object.strokeWidth > 0 ? object.strokeWidth / 2 : 0
-    if (object.fill !== 'transparent') {
+    const sketch = shapeSketch(object)
+    if (sketch?.fill) {
+      ctx.save()
+      ctx.translate(object.x, object.y)
+      ctx.fillStyle = object.fill
+      ctx.fill(new Path2D(sketch.fill))
+      ctx.restore()
+    } else if (object.fill !== 'transparent') {
       if (object.shadow) {
         ctx.shadowColor = 'rgba(40, 32, 22, 0.14)'
         ctx.shadowBlur = 16
@@ -90,24 +103,24 @@ export function paintScene(ctx: CanvasRenderingContext2D, doc: Doc, objects: Sce
       ctx.fill()
       ctx.shadowColor = 'transparent'
     }
-    if (object.strokeWidth > 0 && object.stroke !== 'transparent') {
+    if (sketch?.stroke && object.strokeWidth > 0 && object.stroke !== 'transparent') {
+      ctx.save()
+      ctx.translate(object.x, object.y)
+      ctx.strokeStyle = object.stroke
+      ctx.lineWidth = roughStrokeWidth(object)
+      ctx.lineJoin = 'round'
+      ctx.lineCap = 'round'
+      ctx.setLineDash([])
+      ctx.stroke(new Path2D(sketch.stroke))
+      ctx.restore()
+    } else if (!sketch && object.strokeWidth > 0 && object.stroke !== 'transparent') {
       ctx.strokeStyle = object.stroke
       ctx.lineWidth = object.strokeWidth
       ctx.lineJoin = 'round'
       ctx.lineCap = 'round'
       const dash = dashOf(object.strokeStyle, object.strokeWidth)
       ctx.setLineDash(dash ? dash.split(' ').map(Number) : [])
-      if ((object.roughness ?? 0) >= 0.5) {
-        const seed = object.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 3)
-        const loop = roughen(outlinePoints(object.w, object.h, object.radius), object.roughness, seed).map((point) => ({
-          x: object.x + point.x,
-          y: object.y + point.y,
-        }))
-        tracePath(ctx, loop)
-        ctx.closePath()
-      } else {
-        roundedRect(ctx, object.x + inset, object.y + inset, Math.max(0, object.w - inset * 2), Math.max(0, object.h - inset * 2), object.radius)
-      }
+      roundedRect(ctx, object.x + inset, object.y + inset, Math.max(0, object.w - inset * 2), Math.max(0, object.h - inset * 2), object.radius)
       ctx.stroke()
       ctx.setLineDash([])
     }

@@ -1,5 +1,7 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { arrowHeadPath, dashOf, outlinePoints, pathOf, restPath, roughen, smoothSamples, toSvgPath, trimPath } from './path'
+import { selectionBounds } from './doc'
+import { arrowHeadPath, dashOf, pathOf, restPath, smoothSamples, toSvgPath, trimPath } from './path'
+import { arrowSketch, roughStrokeWidth, shapeSketch } from './sketch'
 import type { Guide, Handle, SceneObject } from './types'
 
 const HANDLES: Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
@@ -12,13 +14,13 @@ function ArrowShape({ object, interactive, showHidden, zIndex, onPointerDownObje
   onPointerDownObject?: (event: ReactPointerEvent, id: string) => void
   onDoubleClickObject?: (event: ReactMouseEvent, id: string) => void
 }) {
-  const seed = object.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 1)
-  const drawn = roughen(trimPath(pathOf(object), object.light), object.roughness ?? 0, seed)
+  const drawn = trimPath(pathOf(object), object.light)
   const hidden = restPath(pathOf(object), object.light)
   const width = object.strokeWidth || 1.5
   const dash = dashOf(object.strokeStyle, width)
+  const sketch = arrowSketch(object)
   const fullLine = toSvgPath(smoothSamples(pathOf(object)))
-  const line = toSvgPath(drawn)
+  const line = sketch?.stroke || toSvgPath(drawn)
   const hiddenLine = toSvgPath(hidden)
   const show = drawn.length >= 2
   return (
@@ -37,8 +39,8 @@ function ArrowShape({ object, interactive, showHidden, zIndex, onPointerDownObje
       {showHidden && hidden.length >= 2 && (
         <path className="arrow-rest" d={hiddenLine} stroke={object.stroke} strokeWidth={Math.max(1, width * 0.35)} strokeDasharray="5 6" fill="none" opacity={0.35} />
       )}
-      {show && <path className="arrow-line" d={line} stroke={object.stroke} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" strokeDasharray={dash || undefined} fill="none" />}
-      {show && (
+      {show && <path className="arrow-line" d={line} stroke={object.stroke} strokeWidth={sketch ? roughStrokeWidth(object) : width} strokeLinecap="round" strokeLinejoin="round" strokeDasharray={sketch ? undefined : dash || undefined} fill="none" />}
+      {show && !sketch && (
         <path className="arrow-head" d={arrowHeadPath(drawn, width)} stroke={object.stroke} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" fill="none" />
       )}
     </svg>
@@ -80,6 +82,8 @@ export function SceneView({
 }) {
   const selected = new Set(selectedIds)
   const connected = new Set(connectIds ?? [])
+  const multi = selectedIds.length > 1
+  const frame = multi ? selectionBounds(objects.filter((object) => selected.has(object.id))) : null
   return (
     <div
       className="stage"
@@ -109,15 +113,13 @@ export function SceneView({
           )
         }
         const editing = editingId === object.id
-        const rough = (object.roughness ?? 0) >= 0.5
-        const seed = object.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 3)
-        const outline = toSvgPath(roughen(outlinePoints(object.w, object.h, object.radius), object.roughness ?? 0, seed))
+        const sketch = shapeSketch(object)
         const kind = object.strokeStyle === 'dashed' ? 'dashed' : object.strokeStyle === 'dotted' ? 'dotted' : 'solid'
         return (
           <div
             key={object.id}
             data-object-id={object.id}
-            className={['obj', object.type === 'label' ? 'is-label' : '', isSelected ? 'is-selected' : '', connected.has(object.id) ? 'is-connect' : ''].filter(Boolean).join(' ')}
+            className={['obj', object.type === 'label' ? 'is-label' : '', isSelected && !multi ? 'is-selected' : '', connected.has(object.id) ? 'is-connect' : ''].filter(Boolean).join(' ')}
             style={{
               left: object.x,
               top: object.y,
@@ -125,10 +127,10 @@ export function SceneView({
               height: object.h,
               transform: `rotate(${object.rotation}deg)`,
               opacity: object.opacity,
-              background: object.fill === 'transparent' ? 'transparent' : object.fill,
+              background: sketch || object.fill === 'transparent' ? 'transparent' : object.fill,
               color: object.textColor,
               borderRadius: object.radius,
-              border: !rough && object.strokeWidth > 0 ? `${object.strokeWidth}px ${kind} ${object.stroke}` : 'none',
+              border: !sketch && object.strokeWidth > 0 ? `${object.strokeWidth}px ${kind} ${object.stroke}` : 'none',
               boxShadow: object.shadow ? '0 10px 22px rgba(40, 32, 22, 0.12)' : 'none',
               fontSize: object.fontSize,
               fontFamily: 'Virgil, system-ui, sans-serif',
@@ -140,9 +142,12 @@ export function SceneView({
             onPointerDown={interactive ? (event) => onPointerDownObject?.(event, object.id) : undefined}
             onDoubleClick={interactive ? (event) => onDoubleClickObject?.(event, object.id) : undefined}
           >
-            {rough && object.strokeWidth > 0 && (
+            {sketch && (sketch.fill || (sketch.stroke && object.strokeWidth > 0)) && (
               <svg className="obj-stroke" viewBox={`0 0 ${object.w} ${object.h}`} width={object.w} height={object.h}>
-                <path d={outline} stroke={object.stroke} strokeWidth={object.strokeWidth} strokeDasharray={dashOf(kind, object.strokeWidth) || undefined} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                {sketch.fill && <path d={sketch.fill} fill={object.fill} stroke="none" />}
+                {sketch.stroke && object.strokeWidth > 0 && (
+                  <path d={sketch.stroke} stroke={object.stroke} strokeWidth={roughStrokeWidth(object)} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                )}
               </svg>
             )}
             {editing ? (
@@ -161,7 +166,7 @@ export function SceneView({
             ) : (
               <span>{object.text}</span>
             )}
-            {interactive && isSelected && !object.locked && selectedIds.length === 1 && (
+            {interactive && isSelected && !object.locked && !multi && (
               <>
                 {HANDLES.map((handle) => (
                   <i
@@ -185,7 +190,7 @@ export function SceneView({
           </div>
         )
       })}
-      {interactive &&
+      {interactive && !multi &&
         objects
           .filter((object) => object.type === 'arrow' && selected.has(object.id) && !object.locked)
           .map((object) => (
@@ -207,6 +212,27 @@ export function SceneView({
               })}
             </div>
           ))}
+      {interactive && frame && (
+        <div className="selection-frame" data-testid="selection-frame" style={{ left: frame.x, top: frame.y, width: frame.w, height: frame.h }}>
+          {HANDLES.map((handle) => (
+            <i
+              key={handle}
+              className={`handle handle-${handle}`}
+              onPointerDown={(event) => {
+                event.stopPropagation()
+                onHandleDown?.(event, selectedIds[0], handle)
+              }}
+            />
+          ))}
+          <i
+            className="handle handle-rotate"
+            onPointerDown={(event) => {
+              event.stopPropagation()
+              onHandleDown?.(event, selectedIds[0], 'rotate')
+            }}
+          />
+        </div>
+      )}
       {(guides ?? []).map((guide) => (
         <i
           key={`${guide.axis}-${guide.at}`}

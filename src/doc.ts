@@ -243,6 +243,123 @@ export function selectionBounds(objects: SceneObject[]): { x: number; y: number;
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
 }
 
+export function groupMembers(objects: SceneObject[], id: string): string[] {
+  const object = objects.find((item) => item.id === id)
+  if (!object) return []
+  if (!object.groupId) return [id]
+  const members = objects.filter((item) => item.groupId === object.groupId).map((item) => item.id)
+  return members.length ? members : [id]
+}
+
+function overlaps(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+}
+
+export function marqueeTargets(
+  objects: SceneObject[],
+  box: { x: number; y: number; w: number; h: number },
+  already: string[] = [],
+): string[] {
+  const hit = objects.filter((object) => !object.locked && overlaps(objectBounds(object), box)).map((object) => object.id)
+  return expandGroups(objects, [...already, ...hit])
+}
+
+export function expandGroups(objects: SceneObject[], ids: string[]): string[] {
+  const seen = new Set<string>()
+  const next: string[] = []
+  for (const id of ids) {
+    for (const member of groupMembers(objects, id)) {
+      if (seen.has(member)) continue
+      seen.add(member)
+      next.push(member)
+    }
+  }
+  return next
+}
+
+export function dragTargets(objects: SceneObject[], selectedIds: string[], id: string, shift: boolean): string[] {
+  const members = groupMembers(objects, id)
+  if (!members.length) return selectedIds
+  if (!shift) {
+    if (selectedIds.includes(id)) return expandGroups(objects, selectedIds)
+    return members
+  }
+  const next = new Set(selectedIds)
+  const allOn = members.every((member) => next.has(member))
+  for (const member of members) {
+    if (allOn) next.delete(member)
+    else next.add(member)
+  }
+  return expandGroups(objects, [...next])
+}
+
+function scalePoint(x: number, y: number, anchorX: number, anchorY: number, scaleX: number, scaleY: number) {
+  return { x: anchorX + (x - anchorX) * scaleX, y: anchorY + (y - anchorY) * scaleY }
+}
+
+export function scaleObjects(objects: SceneObject[], ids: string[], handle: Handle, dx: number, dy: number): SceneObject[] {
+  const selected = new Set(ids)
+  const picked = objects.filter((object) => selected.has(object.id) && !object.locked)
+  const box = selectionBounds(picked)
+  if (!box || box.w < 1 || box.h < 1) return objects
+  let nextW = box.w
+  let nextH = box.h
+  if (handle.includes('e') || handle.includes('w')) nextW = box.w + (handle.includes('w') ? -dx : dx)
+  if (handle.includes('n') || handle.includes('s')) nextH = box.h + (handle.includes('n') ? -dy : dy)
+  nextW = Math.max(28, nextW)
+  nextH = Math.max(28, nextH)
+  const scaleX = nextW / box.w
+  const scaleY = nextH / box.h
+  const anchorX = handle.includes('w') ? box.x + box.w : handle.includes('e') ? box.x : box.x + box.w / 2
+  const anchorY = handle.includes('n') ? box.y + box.h : handle.includes('s') ? box.y : box.y + box.h / 2
+  const fontScale = Math.hypot(scaleX, scaleY) / Math.SQRT2
+  return objects.map((object) => {
+    if (!selected.has(object.id) || object.locked) return object
+    if (object.type === 'arrow') {
+      return withPath(
+        object,
+        pathOf(object).map((point) => scalePoint(point.x, point.y, anchorX, anchorY, scaleX, scaleY)),
+      )
+    }
+    const scaled = {
+      ...object,
+      x: anchorX + (object.x - anchorX) * scaleX,
+      y: anchorY + (object.y - anchorY) * scaleY,
+      w: Math.max(1, object.w * scaleX),
+      h: Math.max(1, object.h * scaleY),
+      fontSize: object.type === 'label' ? Math.max(1, object.fontSize * fontScale) : object.fontSize,
+    }
+    return object.type === 'label' ? fitLabel(scaled) : scaled
+  })
+}
+
+export function rotateObjects(objects: SceneObject[], ids: string[], degrees: number): SceneObject[] {
+  const selected = new Set(ids)
+  const picked = objects.filter((object) => selected.has(object.id) && !object.locked)
+  const box = selectionBounds(picked)
+  if (!box) return objects
+  const cx = box.x + box.w / 2
+  const cy = box.y + box.h / 2
+  const rad = (degrees * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  const spin = (x: number, y: number) => ({
+    x: cx + (x - cx) * cos - (y - cy) * sin,
+    y: cy + (x - cx) * sin + (y - cy) * cos,
+  })
+  return objects.map((object) => {
+    if (!selected.has(object.id) || object.locked) return object
+    if (object.type === 'arrow') return withPath(object, pathOf(object).map((point) => spin(point.x, point.y)))
+    const center = spin(object.x + object.w / 2, object.y + object.h / 2)
+    return {
+      ...object,
+      x: center.x - object.w / 2,
+      y: center.y - object.h / 2,
+      rotation: object.rotation + degrees,
+    }
+  })
+}
+
 export function alignObjects(
   objects: SceneObject[],
   ids: string[],
